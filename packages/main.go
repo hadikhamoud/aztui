@@ -10,6 +10,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/graph"
 	"log"
 	"os"
 )
@@ -26,15 +27,19 @@ type prsLoadedMsg struct {
 	prs []git.GitPullRequest
 }
 
+type usersLoadedMsg struct {
+	users graph.PagedGraphUsers
+}
 type model struct {
 	table        table.Model
 	prs          table.Model
+	users        table.Model
 	focusedTable int
 	width        int
 	height       int
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m model) Init() tea.Cmd { return loadUsers() }
 
 func loadPRs(repoId string) tea.Cmd {
 	return func() tea.Msg {
@@ -43,6 +48,12 @@ func loadPRs(repoId string) tea.Cmd {
 	}
 }
 
+func loadUsers() tea.Cmd {
+	return func() tea.Msg {
+		users := getUsersASMI()
+		return usersLoadedMsg{users: *users}
+	}
+}
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
@@ -72,9 +83,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			{Title: "Status", Width: prCol4Width},
 		})
 
-		tableHeight := (m.height - 6) / 2
+		userCol1Width := tableWidth / 4
+		userCol2Width := tableWidth / 4
+		userCol3Width := tableWidth / 4
+		userCol4Width := tableWidth - userCol1Width - userCol2Width - userCol3Width
+		m.users.SetColumns([]table.Column{
+			{Title: "User", Width: userCol1Width},
+			{Title: "Display Name", Width: userCol2Width},
+			{Title: "Email", Width: userCol3Width},
+			{Title: "User Id", Width: userCol4Width},
+		})
+
+		tableHeight := (m.height - 9) / 3
 		m.table.SetHeight(tableHeight)
 		m.prs.SetHeight(tableHeight)
+		m.users.SetHeight(tableHeight)
 
 		return m, nil
 	case repoSelectedMsg:
@@ -86,6 +109,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.prs.SetRows(rows)
 		return m, nil
+	case usersLoadedMsg:
+		if msg.users.GraphUsers != nil {
+			rows := make([]table.Row, len(*msg.users.GraphUsers))
+			for i, user := range *msg.users.GraphUsers {
+				displayName := ""
+				if user.DisplayName != nil {
+					displayName = *user.DisplayName
+				}
+				principalName := ""
+				if user.PrincipalName != nil {
+					principalName = *user.PrincipalName
+				}
+				mailAddress := ""
+				if user.MailAddress != nil {
+					mailAddress = *user.MailAddress
+				}
+				descriptor := ""
+				if user.Descriptor != nil {
+					descriptor = *user.Descriptor
+				}
+				rows[i] = table.Row{principalName, displayName, mailAddress, descriptor}
+			}
+			m.users.SetRows(rows)
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab":
@@ -93,8 +142,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.table.Blur()
 				m.prs.Focus()
 				m.focusedTable = 1
-			} else {
+			} else if m.focusedTable == 1 {
 				m.prs.Blur()
+				m.users.Focus()
+				m.focusedTable = 2
+			} else {
+				m.users.Blur()
 				m.table.Focus()
 				m.focusedTable = 0
 			}
@@ -105,11 +158,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.table.Focus()
 				}
-			} else {
+			} else if m.focusedTable == 1 {
 				if m.prs.Focused() {
 					m.prs.Blur()
 				} else {
 					m.prs.Focus()
+				}
+			} else {
+				if m.users.Focused() {
+					m.users.Blur()
+				} else {
+					m.users.Focus()
 				}
 			}
 		case "q", "ctrl+c":
@@ -133,14 +192,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.focusedTable == 0 {
 		m.table, cmd = m.table.Update(msg)
-	} else {
+	} else if m.focusedTable == 1 {
 		m.prs, cmd = m.prs.Update(msg)
+	} else {
+		m.users, cmd = m.users.Update(msg)
 	}
 	return m, cmd
 }
 
 func (m model) View() string {
-	return baseStyle.Render(m.table.View()) + "\n" + baseStyle.Render(m.prs.View()) + "\n"
+	return baseStyle.Render(m.table.View()) + "\n" + baseStyle.Render(m.prs.View()) + "\n" + baseStyle.Render(m.users.View()) + "\n"
 }
 
 func getReposASMI() *[]git.GitRepository {
@@ -157,6 +218,23 @@ func getReposASMI() *[]git.GitRepository {
 		log.Fatal(err)
 	}
 	return repos
+}
+
+func getUsersASMI() *graph.PagedGraphUsers {
+	organizationUrl := os.Getenv("AZURE_ORG_URL")
+	personalAccessToken := os.Getenv("AZURE_PAT")
+
+	connection := azuredevops.NewPatConnection(organizationUrl, personalAccessToken)
+	ctx := context.Background()
+
+	Users, err := internal.GetUsers(ctx, connection)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("DEBUG: Retrieved %d users", len(*Users.GraphUsers))
+	return Users
+
 }
 
 func getPRsASMI(RepositoryId string) *[]git.GitPullRequest {
@@ -181,9 +259,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
-
 	repos := getReposASMI()
-
 	columns := []table.Column{
 		{Title: "Repo", Width: 40},
 		{Title: "RepoLink", Width: 40},
@@ -229,7 +305,22 @@ func main() {
 	)
 	prTable.SetStyles(s)
 
-	m := model{t, prTable, 0, 0, 0}
+	usersColumns := []table.Column{
+		{Title: "User", Width: 40},
+		{Title: "Display Name", Width: 40},
+		{Title: "Email", Width: 40},
+		{Title: "User Id", Width: 40},
+	}
+
+	usersTable := table.New(
+		table.WithColumns(usersColumns),
+		table.WithRows([]table.Row{}),
+		table.WithFocused(false),
+		table.WithHeight(7),
+	)
+	usersTable.SetStyles(s)
+
+	m := model{t, prTable, usersTable, 0, 0, 0}
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Println("Error running program:", err)
 		os.Exit(1)
