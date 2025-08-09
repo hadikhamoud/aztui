@@ -1,18 +1,17 @@
 package main
 
 import (
+	"aztui/packages/internal/api"
 	"context"
 	"fmt"
-	"log"
-	"os"
-
-	"aztui/packages/internal"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joho/godotenv"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
+	"log"
+	"os"
 )
 
 var baseStyle = lipgloss.NewStyle().
