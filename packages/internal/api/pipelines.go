@@ -1,0 +1,19 @@
+package internal
+
+import (
+	"context"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/pipelines"
+)
+
+func GetPipelines(ctx context.Context, connection *azuredevops.Connection) (*[]pipelines.Pipeline, error) {
+	PipelineClient := pipelines.NewClient(ctx, connection)
+	pipelinesListArgs := pipelines.ListPipelinesArgs{}
+
+	pipelinesList, err := PipelineClient.ListPipelines(ctx, pipelinesListArgs)
+
+	if err != nil {
+		return nil, err
+	}
+	return pipelinesList, nil
+}
