@@ -7,3 +7,6 @@ Main features to tackle
 - Build pipeline status updates
 - Remote history commit checking
 - Pulling new repos into local
+- Cutting new tags (unsupported entirely)
+- view assigned tickets
+- add service hooks?
