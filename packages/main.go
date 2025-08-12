@@ -1,7 +1,9 @@
 package main
 
 import (
-	"aztui/packages/internal/api"
+	"aztui/packages/internal/api/identity"
+	"aztui/packages/internal/api/prs"
+	"aztui/packages/internal/api/repos"
 	"context"
 	"fmt"
 	"github.com/charmbracelet/bubbles/table"
@@ -213,7 +215,7 @@ func getReposASMI() *[]git.GitRepository {
 
 	ProjectName := "ArabicSocialMediaIndex"
 
-	repos, err := internal.GetRepos(ctx, connection, ProjectName)
+	repos, err := repos.GetRepos(ctx, connection, ProjectName)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -227,7 +229,7 @@ func getUsersASMI() *graph.PagedGraphUsers {
 	connection := azuredevops.NewPatConnection(organizationUrl, personalAccessToken)
 	ctx := context.Background()
 
-	Users, err := internal.GetUsers(ctx, connection)
+	Users, err := identity.GetUsers(ctx, connection)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -247,7 +249,7 @@ func getPRsASMI(RepositoryId string) *[]git.GitPullRequest {
 
 	ProjectName := "ArabicSocialMediaIndex"
 
-	Prs, err := internal.GetPRs(ctx, connection, ProjectName, RepositoryId)
+	Prs, err := prs.GetPRs(ctx, connection, ProjectName, RepositoryId)
 	if err != nil {
 		log.Fatal(err)
 	}
