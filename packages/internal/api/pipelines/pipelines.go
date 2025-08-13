@@ -17,3 +17,17 @@ func GetPipelines(ctx context.Context, connection *azuredevops.Connection) (*[]p
 	}
 	return pipelinesList, nil
 }
+
+func GetRuns(ctx context.Context, connection *azuredevops.Connection, pipelineID int) (*[]pipelines.Run, error) {
+	PipelineClient := pipelines.NewClient(ctx, connection)
+	runsListArgs := pipelines.ListRunsArgs{
+		PipelineId: &pipelineID,
+	}
+
+	runsList, err := PipelineClient.ListRuns(ctx, runsListArgs)
+
+	if err != nil {
+		return nil, err
+	}
+	return runsList, nil
+}
