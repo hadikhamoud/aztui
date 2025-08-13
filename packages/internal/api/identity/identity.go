@@ -12,7 +12,7 @@ func GetUsers(ctx context.Context, connection *azuredevops.Connection) (*graph.P
 	if err != nil {
 		return nil, err
 	}
-
+	// actual account instead of Group or Bot
 	filter := "(licenseId eq 'Account-Express' or licenseId eq 'Account-TestManager')"
 	searchArgs := memberentitlementmanagement.SearchUserEntitlementsArgs{
 		Filter: &filter,
@@ -22,7 +22,7 @@ func GetUsers(ctx context.Context, connection *azuredevops.Connection) (*graph.P
 	if err != nil {
 		return nil, err
 	}
-
+	// accounts with email addresses and with basic or basic + test plans
 	var filteredUsers []graph.GraphUser
 	if entitlements.Members != nil {
 		for _, member := range *entitlements.Members {
