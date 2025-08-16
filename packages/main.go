@@ -16,31 +16,32 @@ import (
 	"strings"
 )
 
-var projectsBoxStyle = lipgloss.NewStyle().
+var baseBoxStyle = lipgloss.NewStyle().
 	BorderStyle(lipgloss.RoundedBorder()).
-	BorderForeground(lipgloss.Color("240")).
-	Padding(1).
-	Margin(1)
-
-var reposBoxStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.RoundedBorder()).
-	BorderForeground(lipgloss.Color("240")).
-	Padding(1).
-	Margin(1)
+	Padding(1)
 
 var rightPanelStyle = lipgloss.NewStyle().
 	BorderStyle(lipgloss.RoundedBorder()).
 	BorderForeground(lipgloss.Color("240")).
-	Padding(1).
-	Margin(1)
+	Padding(1)
+
+var highlightStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("0")).
+	Background(lipgloss.Color("12"))
 
 type projectLoadedMsg struct {
 	repos []git.GitRepository
 }
 
+type repoOption struct {
+	name string
+	desc string
+}
+
 type model struct {
 	projects        []core.TeamProjectReference
 	repos           []git.GitRepository
+	showRepoOptions bool
 	focusedPanel    int
 	width           int
 	height          int
@@ -48,6 +49,12 @@ type model struct {
 	projectsScroll  int
 	reposScroll     int
 	selectedProject *core.TeamProjectReference
+	selectedRepo    *git.GitRepository
+	repoOptions     []repoOption
+	searchMode      bool
+	searchQuery     string
+	filteredItems   []interface{}
+	originalCursor  int
 }
 
 func (m model) Init() tea.Cmd {
@@ -99,40 +106,179 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
+		if m.searchMode {
+			switch msg.String() {
+			case "escape", "esc":
+				m.searchMode = false
+				m.searchQuery = ""
+				m.filteredItems = nil
+				m.cursor = m.originalCursor
+				m.updateScroll()
+				return m, nil
+			case "enter":
+				if len(m.filteredItems) > 0 && m.cursor < len(m.filteredItems) {
+					selected := m.filteredItems[m.cursor]
+					m.searchMode = false
+					m.searchQuery = ""
+					m.filteredItems = nil
+
+					if m.focusedPanel == 0 {
+						if project, ok := selected.(core.TeamProjectReference); ok {
+							for i, p := range m.projects {
+								if p.Id != nil && project.Id != nil && *p.Id == *project.Id {
+									m.cursor = i
+									m.selectedProject = &m.projects[i]
+									m.updateScroll()
+									return m, loadProjectRepos(*m.selectedProject.Name)
+								}
+							}
+						}
+					} else if m.focusedPanel == 1 {
+						if repo, ok := selected.(git.GitRepository); ok {
+							for i, r := range m.repos {
+								if r.Id != nil && repo.Id != nil && *r.Id == *repo.Id {
+									m.cursor = i
+									m.selectedRepo = &m.repos[i]
+									m.showRepoOptions = true
+									m.cursor = 0
+									m.updateScroll()
+									return m, nil
+								}
+							}
+						}
+					}
+				}
+				return m, nil
+			case "backspace":
+				if len(m.searchQuery) > 0 {
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+					m.filterItems()
+					m.cursor = 0
+				}
+				return m, nil
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+				}
+				return m, nil
+			case "down", "j":
+				if m.cursor < len(m.filteredItems)-1 {
+					m.cursor++
+				}
+				return m, nil
+			default:
+				if len(msg.Runes) > 0 {
+					m.searchQuery += string(msg.Runes)
+					m.filterItems()
+					m.cursor = 0
+				}
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
+		case "/":
+			if !m.showRepoOptions {
+				m.searchMode = true
+				m.searchQuery = ""
+				m.originalCursor = m.cursor
+				m.cursor = 0
+				m.filterItems()
+				return m, nil
+			}
+		case "escape", "esc", "backspace":
+			if m.showRepoOptions {
+				m.showRepoOptions = false
+				m.focusedPanel = 1
+				// Find the cursor position for the selected repo
+				foundRepo := false
+				for i, repo := range m.repos {
+					if m.selectedRepo != nil && repo.Id != nil && m.selectedRepo.Id != nil && *repo.Id == *m.selectedRepo.Id {
+						m.cursor = i
+						foundRepo = true
+						break
+					}
+				}
+				if !foundRepo {
+					m.cursor = 0
+				}
 				m.updateScroll()
+				return m, nil
+			}
+		case "up", "k":
+			if !m.searchMode {
+				if m.cursor > 0 {
+					m.cursor--
+					m.updateScroll()
+				}
 			}
 		case "down", "j":
-			if m.focusedPanel == 0 && m.cursor < len(m.projects)-1 {
-				m.cursor++
-				m.updateScroll()
-			} else if m.focusedPanel == 1 && m.cursor < len(m.repos)-1 {
-				m.cursor++
-				m.updateScroll()
+			if !m.searchMode {
+				if !m.showRepoOptions {
+					if m.focusedPanel == 0 && m.cursor < len(m.projects)-1 {
+						m.cursor++
+						m.updateScroll()
+					} else if m.focusedPanel == 1 && m.cursor < len(m.repos)-1 {
+						m.cursor++
+						m.updateScroll()
+					}
+				} else if m.showRepoOptions && m.cursor < len(m.repoOptions)-1 {
+					m.cursor++
+				}
 			}
 		case "left", "h":
-			m.focusedPanel = 0
-			m.cursor = 0
+			if !m.searchMode {
+				if !m.showRepoOptions {
+					m.focusedPanel = 0
+					m.cursor = 0
+				} else {
+					// Also allow left arrow to go back from repo options
+					m.showRepoOptions = false
+					m.focusedPanel = 1
+					// Find the cursor position for the selected repo
+					foundRepo := false
+					for i, repo := range m.repos {
+						if m.selectedRepo != nil && repo.Id != nil && m.selectedRepo.Id != nil && *repo.Id == *m.selectedRepo.Id {
+							m.cursor = i
+							foundRepo = true
+							break
+						}
+					}
+					if !foundRepo {
+						m.cursor = 0
+					}
+					m.updateScroll()
+					return m, nil
+				}
+			}
 		case "right", "l":
-			m.focusedPanel = 1
-			m.cursor = 0
+			if !m.searchMode && !m.showRepoOptions {
+				m.focusedPanel = 1
+				m.cursor = 0
+			}
 		case "enter":
-			if m.focusedPanel == 0 && m.cursor < len(m.projects) {
-				m.selectedProject = &m.projects[m.cursor]
-				return m, loadProjectRepos(*m.selectedProject.Name)
+			if !m.searchMode && !m.showRepoOptions {
+				if m.focusedPanel == 0 && m.cursor < len(m.projects) {
+					m.selectedProject = &m.projects[m.cursor]
+					return m, loadProjectRepos(*m.selectedProject.Name)
+				} else if m.focusedPanel == 1 && m.cursor < len(m.repos) {
+					m.selectedRepo = &m.repos[m.cursor]
+					m.showRepoOptions = true
+					m.cursor = 0
+					return m, nil
+				}
 			}
 		case "tab":
-			if m.focusedPanel == 0 {
-				m.focusedPanel = 1
-			} else {
-				m.focusedPanel = 0
+			if !m.searchMode && !m.showRepoOptions {
+				if m.focusedPanel == 0 {
+					m.focusedPanel = 1
+				} else {
+					m.focusedPanel = 0
+				}
+				m.cursor = 0
 			}
-			m.cursor = 0
 		}
 	}
 	return m, nil
@@ -157,86 +303,299 @@ func (m *model) updateScroll() {
 	}
 }
 
-func (m model) View() string {
-	leftWidth := m.width / 2
-	rightWidth := m.width - leftWidth
-	boxHeight := (m.height - 8) / 2
+func (m *model) filterItems() {
+	m.filteredItems = nil
 
-	projectsContent := m.renderProjects(boxHeight - 4)
-	reposContent := m.renderRepos(boxHeight - 4)
-
-	projectsTitle := "Projects"
-	if m.focusedPanel == 0 {
-		projectsTitle = "Projects [FOCUSED]"
+	if m.searchQuery == "" {
+		if m.focusedPanel == 0 {
+			for _, project := range m.projects {
+				m.filteredItems = append(m.filteredItems, project)
+			}
+		} else if m.focusedPanel == 1 {
+			for _, repo := range m.repos {
+				m.filteredItems = append(m.filteredItems, repo)
+			}
+		}
+		return
 	}
 
+	query := strings.ToLower(m.searchQuery)
+
+	if m.focusedPanel == 0 {
+		for _, project := range m.projects {
+			if project.Name != nil && strings.Contains(strings.ToLower(*project.Name), query) {
+				m.filteredItems = append(m.filteredItems, project)
+			}
+		}
+	} else if m.focusedPanel == 1 {
+		for _, repo := range m.repos {
+			if repo.Name != nil && strings.Contains(strings.ToLower(*repo.Name), query) {
+				m.filteredItems = append(m.filteredItems, repo)
+			}
+		}
+	}
+}
+
+func (m model) View() string {
+	// Calculate responsive layout with proper margins
+	instructionHeight := 2 // Reduced space for instructions
+	totalAvailableHeight := m.height - instructionHeight
+
+	// Calculate exact dimensions - left takes half, right takes half
+	leftWidth := m.width / 2
+	rightWidth := m.width - leftWidth
+	leftBoxHeight := totalAvailableHeight / 2 // Each left box gets exactly half
+
+	// Ensure minimum dimensions
+	if leftWidth < 15 {
+		leftWidth = 15
+	}
+	if rightWidth < 15 {
+		rightWidth = 15
+	}
+	if leftBoxHeight < 5 {
+		leftBoxHeight = 5
+	}
+
+	// Calculate content area (subtract borders and padding)
+	leftContentWidth := leftWidth - 4
+	rightContentWidth := rightWidth - 4
+	leftContentHeight := leftBoxHeight - 4
+	rightContentHeight := (leftBoxHeight * 2) - 4 // Right panel = both left boxes combined
+
+	// Ensure content area is not negative
+	if leftContentWidth < 1 {
+		leftContentWidth = 1
+	}
+	if rightContentWidth < 1 {
+		rightContentWidth = 1
+	}
+	if leftContentHeight < 1 {
+		leftContentHeight = 1
+	}
+	if rightContentHeight < 1 {
+		rightContentHeight = 1
+	}
+
+	projectsContent := m.renderProjects(leftContentHeight - 1)
+	reposContent := m.renderRepos(leftContentHeight - 1)
+
+	// Create dynamic styles based on focus
+	projectsStyle := baseBoxStyle.Copy()
+	reposStyle := baseBoxStyle.Copy()
+
+	if m.focusedPanel == 0 && !m.showRepoOptions {
+		projectsStyle = projectsStyle.BorderForeground(lipgloss.Color("12")) // Blue highlight
+	} else {
+		projectsStyle = projectsStyle.BorderForeground(lipgloss.Color("240")) // Gray
+	}
+
+	if (m.focusedPanel == 1 && !m.showRepoOptions) || m.showRepoOptions {
+		reposStyle = reposStyle.BorderForeground(lipgloss.Color("12")) // Blue highlight
+	} else {
+		reposStyle = reposStyle.BorderForeground(lipgloss.Color("240")) // Gray
+	}
+
+	projectsTitle := "Projects"
 	reposTitle := "Repositories"
-	if m.focusedPanel == 1 {
-		reposTitle = "Repositories [FOCUSED]"
+	if m.showRepoOptions {
+		reposTitle = "Repository Options"
 	}
 	if m.selectedProject != nil && m.selectedProject.Name != nil {
 		reposTitle += " (" + *m.selectedProject.Name + ")"
 	}
 
-	projectsBox := projectsBoxStyle.
-		Width(leftWidth - 4).
-		Height(boxHeight).
+	// Create boxes with exact same dimensions
+	projectsBox := projectsStyle.
+		Width(leftContentWidth).
+		Height(leftContentHeight).
 		Render(projectsTitle + "\n" + projectsContent)
 
-	reposBox := reposBoxStyle.
-		Width(leftWidth - 4).
-		Height(boxHeight).
+	reposBox := reposStyle.
+		Width(leftContentWidth).
+		Height(leftContentHeight).
 		Render(reposTitle + "\n" + reposContent)
 
-	instructions := "Controls:\n• ↑/↓: Navigate\n• ←/→: Switch panels\n• Enter: Select project\n• Tab: Switch focus\n• q: Quit"
+	// Create right panel matching total left column height
+	rightPanelContent := "Right Panel\n\n(Reserved for future use)"
 	rightPanel := rightPanelStyle.
-		Width(rightWidth - 4).
-		Height(m.height - 8).
-		Render(instructions)
+		Width(rightContentWidth).
+		Height(rightContentHeight).
+		Render(rightPanelContent)
 
+	// Create left column by stacking projects and repos vertically
 	leftColumn := lipgloss.JoinVertical(lipgloss.Top, projectsBox, reposBox)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, rightPanel)
+	// Create main layout - no margins between panels
+	content := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, rightPanel)
+
+	// Simple instructions at bottom
+	instructions := m.getInstructions()
+	instructionsStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Align(lipgloss.Center)
+
+	return lipgloss.JoinVertical(lipgloss.Top,
+		content,
+		instructionsStyle.Render(instructions),
+	)
 }
 
 func (m model) renderProjects(visibleLines int) string {
 	var content strings.Builder
-	start := m.projectsScroll
-	end := start + visibleLines
-	if end > len(m.projects) {
-		end = len(m.projects)
+	linesUsed := 0
+
+	if m.searchMode && m.focusedPanel == 0 {
+		// Show search input
+		searchLine := fmt.Sprintf("Search: %s", m.searchQuery)
+		content.WriteString(searchLine + "\n")
+		linesUsed++
+
+		// Show filtered results
+		for i, item := range m.filteredItems {
+			if linesUsed >= visibleLines {
+				break
+			}
+
+			if project, ok := item.(core.TeamProjectReference); ok {
+				projectName := ""
+				if project.Name != nil {
+					projectName = *project.Name
+				}
+
+				line := fmt.Sprintf("  %s", projectName)
+
+				if m.cursor == i {
+					line = highlightStyle.Render(line)
+				}
+
+				content.WriteString(line + "\n")
+				linesUsed++
+			}
+		}
+	} else {
+		// Normal mode - show all projects
+		start := m.projectsScroll
+		end := start + visibleLines
+		if end > len(m.projects) {
+			end = len(m.projects)
+		}
+
+		for i := start; i < end; i++ {
+			projectName := ""
+			if m.projects[i].Name != nil {
+				projectName = *m.projects[i].Name
+			}
+
+			line := fmt.Sprintf("  %s", projectName)
+
+			if m.focusedPanel == 0 && m.cursor == i && !m.showRepoOptions && !m.searchMode {
+				// Highlight current selection
+				line = highlightStyle.Render(line)
+			}
+
+			content.WriteString(line + "\n")
+			linesUsed++
+		}
 	}
 
-	for i := start; i < end; i++ {
-		cursor := " "
-		if m.focusedPanel == 0 && m.cursor == i {
-			cursor = ">"
-		}
-		projectName := ""
-		if m.projects[i].Name != nil {
-			projectName = *m.projects[i].Name
-		}
-		content.WriteString(fmt.Sprintf("%s %s\n", cursor, projectName))
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
 	}
+
 	return content.String()
 }
 
 func (m model) renderRepos(visibleLines int) string {
 	var content strings.Builder
-	start := m.reposScroll
-	end := start + visibleLines
-	if end > len(m.repos) {
-		end = len(m.repos)
+	linesUsed := 0
+
+	if m.showRepoOptions {
+		// Show repository options
+		if m.selectedRepo != nil && m.selectedRepo.Name != nil {
+			content.WriteString("Selected: " + *m.selectedRepo.Name + "\n\n")
+			linesUsed += 2
+		}
+
+		for i, option := range m.repoOptions {
+			line := fmt.Sprintf("  %s", option.name)
+
+			if m.cursor == i {
+				// Highlight current selection
+				line = highlightStyle.Render(line)
+			}
+
+			content.WriteString(line + "\n")
+			linesUsed++
+		}
+	} else if m.searchMode && m.focusedPanel == 1 {
+		// Show search input
+		searchLine := fmt.Sprintf("Search: %s", m.searchQuery)
+		content.WriteString(searchLine + "\n")
+		linesUsed++
+
+		// Show filtered results
+		for i, item := range m.filteredItems {
+			if linesUsed >= visibleLines {
+				break
+			}
+
+			if repo, ok := item.(git.GitRepository); ok {
+				repoName := ""
+				if repo.Name != nil {
+					repoName = *repo.Name
+				}
+
+				line := fmt.Sprintf("  %s", repoName)
+
+				if m.cursor == i {
+					line = highlightStyle.Render(line)
+				}
+
+				content.WriteString(line + "\n")
+				linesUsed++
+			}
+		}
+	} else {
+		// Show repositories list
+		start := m.reposScroll
+		end := start + visibleLines
+		if end > len(m.repos) {
+			end = len(m.repos)
+		}
+
+		for i := start; i < end; i++ {
+			line := fmt.Sprintf("  %s", *m.repos[i].Name)
+
+			if m.focusedPanel == 1 && m.cursor == i && !m.showRepoOptions && !m.searchMode {
+				// Highlight current selection
+				line = highlightStyle.Render(line)
+			}
+
+			content.WriteString(line + "\n")
+			linesUsed++
+		}
 	}
 
-	for i := start; i < end; i++ {
-		cursor := " "
-		if m.focusedPanel == 1 && m.cursor == i {
-			cursor = ">"
-		}
-		content.WriteString(fmt.Sprintf("%s %s\n", cursor, *m.repos[i].Name))
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
 	}
+
 	return content.String()
+}
+
+func (m model) getInstructions() string {
+	if m.searchMode {
+		return "Type to search   •   ↑/↓ Navigate   •   Enter Select   •   Esc Cancel   •   q Quit"
+	}
+	if m.showRepoOptions {
+		return "↑/↓ Navigate   •   Enter Select   •   Esc/← Back   •   q Quit"
+	}
+	return "↑/↓ Navigate   •   ←/→ Switch Panels   •   Enter Select   •   / Search   •   Tab Focus   •   q Quit"
 }
 
 func main() {
@@ -245,9 +604,16 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
+	repoOptions := []repoOption{
+		{name: "Pipelines", desc: "View and manage build/release pipelines"},
+		{name: "Pull Requests", desc: "View and manage pull requests"},
+		{name: "Release Tags", desc: "View and manage release tags"},
+	}
+
 	m := model{
 		projects:        []core.TeamProjectReference{},
 		repos:           []git.GitRepository{},
+		showRepoOptions: false,
 		focusedPanel:    0,
 		width:           80,
 		height:          24,
@@ -255,6 +621,12 @@ func main() {
 		projectsScroll:  0,
 		reposScroll:     0,
 		selectedProject: nil,
+		selectedRepo:    nil,
+		repoOptions:     repoOptions,
+		searchMode:      false,
+		searchQuery:     "",
+		filteredItems:   nil,
+		originalCursor:  0,
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
