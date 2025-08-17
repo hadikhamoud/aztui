@@ -29,6 +29,15 @@ var highlightStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("0")).
 	Background(lipgloss.Color("12"))
 
+var fullWidthHighlightStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("0")).
+	Background(lipgloss.Color("12"))
+
+var searchStyle = lipgloss.NewStyle().
+	BorderStyle(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.Color("12")).
+	Padding(0, 1)
+
 type projectLoadedMsg struct {
 	repos []git.GitRepository
 }
@@ -339,7 +348,18 @@ func (m *model) filterItems() {
 func (m model) View() string {
 	// Calculate responsive layout with proper margins
 	instructionHeight := 2 // Reduced space for instructions
-	totalAvailableHeight := m.height - instructionHeight
+	logoHeight := 1        // Space for small ASCII logo
+	searchHeight := 3      // Always reserve space for search bar
+	totalAvailableHeight := m.height - instructionHeight - logoHeight - searchHeight
+
+	// Ensure we have enough space to work with
+	if totalAvailableHeight < 10 {
+		totalAvailableHeight = 10
+	}
+	if m.width < 40 {
+		// For very small terminals, just return a simple message
+		return "Terminal too small. Please resize."
+	}
 
 	// Calculate exact dimensions - left takes half, right takes half
 	leftWidth := m.width / 2
@@ -347,25 +367,36 @@ func (m model) View() string {
 	leftBoxHeight := totalAvailableHeight / 2 // Each left box gets exactly half
 
 	// Ensure minimum dimensions
-	if leftWidth < 15 {
-		leftWidth = 15
+	if leftWidth < 20 {
+		leftWidth = 20
+		rightWidth = m.width - leftWidth
 	}
-	if rightWidth < 15 {
-		rightWidth = 15
+	if rightWidth < 20 {
+		rightWidth = 20
+		leftWidth = m.width - rightWidth
 	}
-	if leftBoxHeight < 5 {
-		leftBoxHeight = 5
+	if leftBoxHeight < 3 {
+		leftBoxHeight = 3
 	}
 
 	// Calculate content area (subtract borders and padding)
 	leftContentWidth := leftWidth - 4
 	rightContentWidth := rightWidth - 4
 	leftContentHeight := leftBoxHeight - 4
-	rightContentHeight := (leftBoxHeight * 2) - 4 // Right panel = both left boxes combined
+	rightContentHeight := (leftContentHeight+4)*2 - 4 // Right panel = total left column height minus borders
 
-	// Ensure content area is not negative
-	if leftContentWidth < 1 {
-		leftContentWidth = 1
+	// Ensure content area is not negative and has reasonable minimums
+	if leftContentWidth < 5 {
+		leftContentWidth = 5
+	}
+	if rightContentWidth < 5 {
+		rightContentWidth = 5
+	}
+	if leftContentHeight < 1 {
+		leftContentHeight = 1
+	}
+	if rightContentHeight < 1 {
+		rightContentHeight = 1
 	}
 	if rightContentWidth < 1 {
 		rightContentWidth = 1
@@ -396,16 +427,17 @@ func (m model) View() string {
 		reposStyle = reposStyle.BorderForeground(lipgloss.Color("240")) // Gray
 	}
 
-	projectsTitle := "Projects"
-	reposTitle := "Repositories"
+	// Create titles with border styling
+	projectsTitle := "┤ Projects ├"
+	reposTitle := "┤ Repositories ├"
 	if m.showRepoOptions {
-		reposTitle = "Repository Options"
+		reposTitle = "┤ Repository Options ├"
 	}
 	if m.selectedProject != nil && m.selectedProject.Name != nil {
-		reposTitle += " (" + *m.selectedProject.Name + ")"
+		reposTitle = "┤ " + *m.selectedProject.Name + " ├"
 	}
 
-	// Create boxes with exact same dimensions
+	// Create boxes with titles embedded in content
 	projectsBox := projectsStyle.
 		Width(leftContentWidth).
 		Height(leftContentHeight).
@@ -423,6 +455,34 @@ func (m model) View() string {
 		Height(rightContentHeight).
 		Render(rightPanelContent)
 
+	// Create small ASCII logo
+	logoText := `▄▄█ AZTUI █▄▄`
+
+	logoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("12")).
+		Bold(true).
+		Align(lipgloss.Left)
+
+	logo := logoStyle.Render(logoText)
+
+	// Create search bar at the top (always reserve space)
+	var searchBar string
+	if m.searchMode {
+		searchQuery := m.searchQuery
+		if searchQuery == "" {
+			searchQuery = "Type to search..."
+		}
+		searchBar = searchStyle.
+			Width(m.width - 4).
+			Render("🔍 Search: " + searchQuery)
+	} else {
+		// Empty space to maintain layout consistency
+		searchBar = lipgloss.NewStyle().
+			Width(m.width - 4).
+			Height(1).
+			Render("")
+	}
+
 	// Create left column by stacking projects and repos vertically
 	leftColumn := lipgloss.JoinVertical(lipgloss.Top, projectsBox, reposBox)
 
@@ -436,6 +496,8 @@ func (m model) View() string {
 		Align(lipgloss.Center)
 
 	return lipgloss.JoinVertical(lipgloss.Top,
+		logo,
+		searchBar,
 		content,
 		instructionsStyle.Render(instructions),
 	)
@@ -445,12 +507,10 @@ func (m model) renderProjects(visibleLines int) string {
 	var content strings.Builder
 	linesUsed := 0
 
-	if m.searchMode && m.focusedPanel == 0 {
-		// Show search input
-		searchLine := fmt.Sprintf("Search: %s", m.searchQuery)
-		content.WriteString(searchLine + "\n")
-		linesUsed++
+	// Calculate content width for full-width highlighting
+	contentWidth := m.width/2 - 6 // Account for borders, padding, and margin
 
+	if m.searchMode && m.focusedPanel == 0 {
 		// Show filtered results
 		for i, item := range m.filteredItems {
 			if linesUsed >= visibleLines {
@@ -463,10 +523,21 @@ func (m model) renderProjects(visibleLines int) string {
 					projectName = *project.Name
 				}
 
+				// Truncate if too long
+				maxLen := contentWidth - 4
+				if maxLen < 1 {
+					maxLen = 1
+				}
+				if len(projectName) > maxLen {
+					projectName = projectName[:maxLen-3] + "..."
+				}
+
 				line := fmt.Sprintf("  %s", projectName)
 
 				if m.cursor == i {
-					line = highlightStyle.Render(line)
+					// Create full-width highlight
+					paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+					line = fullWidthHighlightStyle.Render(paddedLine)
 				}
 
 				content.WriteString(line + "\n")
@@ -487,11 +558,21 @@ func (m model) renderProjects(visibleLines int) string {
 				projectName = *m.projects[i].Name
 			}
 
+			// Truncate if too long
+			maxLen := contentWidth - 4
+			if maxLen < 1 {
+				maxLen = 1
+			}
+			if len(projectName) > maxLen {
+				projectName = projectName[:maxLen-3] + "..."
+			}
+
 			line := fmt.Sprintf("  %s", projectName)
 
 			if m.focusedPanel == 0 && m.cursor == i && !m.showRepoOptions && !m.searchMode {
-				// Highlight current selection
-				line = highlightStyle.Render(line)
+				// Create full-width highlight
+				paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+				line = fullWidthHighlightStyle.Render(paddedLine)
 			}
 
 			content.WriteString(line + "\n")
@@ -512,6 +593,9 @@ func (m model) renderRepos(visibleLines int) string {
 	var content strings.Builder
 	linesUsed := 0
 
+	// Calculate content width for full-width highlighting
+	contentWidth := m.width/2 - 6 // Account for borders, padding, and margin
+
 	if m.showRepoOptions {
 		// Show repository options
 		if m.selectedRepo != nil && m.selectedRepo.Name != nil {
@@ -523,19 +607,15 @@ func (m model) renderRepos(visibleLines int) string {
 			line := fmt.Sprintf("  %s", option.name)
 
 			if m.cursor == i {
-				// Highlight current selection
-				line = highlightStyle.Render(line)
+				// Create full-width highlight
+				paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+				line = fullWidthHighlightStyle.Render(paddedLine)
 			}
 
 			content.WriteString(line + "\n")
 			linesUsed++
 		}
 	} else if m.searchMode && m.focusedPanel == 1 {
-		// Show search input
-		searchLine := fmt.Sprintf("Search: %s", m.searchQuery)
-		content.WriteString(searchLine + "\n")
-		linesUsed++
-
 		// Show filtered results
 		for i, item := range m.filteredItems {
 			if linesUsed >= visibleLines {
@@ -548,10 +628,21 @@ func (m model) renderRepos(visibleLines int) string {
 					repoName = *repo.Name
 				}
 
+				// Truncate if too long
+				maxLen := contentWidth - 4
+				if maxLen < 1 {
+					maxLen = 1
+				}
+				if len(repoName) > maxLen {
+					repoName = repoName[:maxLen-3] + "..."
+				}
+
 				line := fmt.Sprintf("  %s", repoName)
 
 				if m.cursor == i {
-					line = highlightStyle.Render(line)
+					// Create full-width highlight
+					paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+					line = fullWidthHighlightStyle.Render(paddedLine)
 				}
 
 				content.WriteString(line + "\n")
@@ -567,11 +658,23 @@ func (m model) renderRepos(visibleLines int) string {
 		}
 
 		for i := start; i < end; i++ {
-			line := fmt.Sprintf("  %s", *m.repos[i].Name)
+			repoName := *m.repos[i].Name
+
+			// Truncate if too long
+			maxLen := contentWidth - 4
+			if maxLen < 1 {
+				maxLen = 1
+			}
+			if len(repoName) > maxLen {
+				repoName = repoName[:maxLen-3] + "..."
+			}
+
+			line := fmt.Sprintf("  %s", repoName)
 
 			if m.focusedPanel == 1 && m.cursor == i && !m.showRepoOptions && !m.searchMode {
-				// Highlight current selection
-				line = highlightStyle.Render(line)
+				// Create full-width highlight
+				paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+				line = fullWidthHighlightStyle.Render(paddedLine)
 			}
 
 			content.WriteString(line + "\n")
