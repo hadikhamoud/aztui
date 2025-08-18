@@ -5,6 +5,7 @@ import (
 	"aztui/packages/internal/api/repos"
 	"context"
 	"fmt"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joho/godotenv"
@@ -64,10 +65,14 @@ type model struct {
 	searchQuery     string
 	filteredItems   []interface{}
 	originalCursor  int
+	loadingProjects bool
+	loadingRepos    bool
+	projectsSpinner spinner.Model
+	reposSpinner    spinner.Model
 }
 
 func (m model) Init() tea.Cmd {
-	return loadProjects()
+	return tea.Batch(m.projectsSpinner.Tick, loadProjects())
 }
 
 func loadProjects() tea.Cmd {
@@ -103,17 +108,32 @@ func loadProjectRepos(projectName string) tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	var cmds []tea.Cmd
+
+	// Update spinners
+	if m.loadingProjects {
+		m.projectsSpinner, cmd = m.projectsSpinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+	if m.loadingRepos {
+		m.reposSpinner, cmd = m.reposSpinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
 	switch msg := msg.(type) {
 	case []core.TeamProjectReference:
 		m.projects = msg
-		return m, nil
+		m.loadingProjects = false
+		return m, tea.Batch(cmds...)
 	case projectLoadedMsg:
 		m.repos = msg.repos
-		return m, nil
+		m.loadingRepos = false
+		return m, tea.Batch(cmds...)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
+		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		if m.searchMode {
 			switch msg.String() {
@@ -123,7 +143,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filteredItems = nil
 				m.cursor = m.originalCursor
 				m.updateScroll()
-				return m, nil
+				return m, tea.Batch(cmds...)
 			case "enter":
 				if len(m.filteredItems) > 0 && m.cursor < len(m.filteredItems) {
 					selected := m.filteredItems[m.cursor]
@@ -137,8 +157,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								if p.Id != nil && project.Id != nil && *p.Id == *project.Id {
 									m.cursor = i
 									m.selectedProject = &m.projects[i]
+									m.loadingRepos = true
+									m.repos = []git.GitRepository{}
 									m.updateScroll()
-									return m, loadProjectRepos(*m.selectedProject.Name)
+									return m, tea.Batch(append(cmds, m.reposSpinner.Tick, loadProjectRepos(*m.selectedProject.Name))...)
 								}
 							}
 						}
@@ -151,37 +173,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 									m.showRepoOptions = true
 									m.cursor = 0
 									m.updateScroll()
-									return m, nil
+									return m, tea.Batch(cmds...)
 								}
 							}
 						}
 					}
 				}
-				return m, nil
+				return m, tea.Batch(cmds...)
 			case "backspace":
 				if len(m.searchQuery) > 0 {
 					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
 					m.filterItems()
 					m.cursor = 0
 				}
-				return m, nil
+				return m, tea.Batch(cmds...)
 			case "up", "k":
 				if m.cursor > 0 {
 					m.cursor--
 				}
-				return m, nil
+				return m, tea.Batch(cmds...)
 			case "down", "j":
 				if m.cursor < len(m.filteredItems)-1 {
 					m.cursor++
 				}
-				return m, nil
+				return m, tea.Batch(cmds...)
 			default:
 				if len(msg.Runes) > 0 {
 					m.searchQuery += string(msg.Runes)
 					m.filterItems()
 					m.cursor = 0
 				}
-				return m, nil
+				return m, tea.Batch(cmds...)
 			}
 		}
 
@@ -195,7 +217,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.originalCursor = m.cursor
 				m.cursor = 0
 				m.filterItems()
-				return m, nil
+				return m, tea.Batch(cmds...)
 			}
 		case "escape", "esc", "backspace":
 			if m.showRepoOptions {
@@ -214,7 +236,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor = 0
 				}
 				m.updateScroll()
-				return m, nil
+				return m, tea.Batch(cmds...)
 			}
 		case "up", "k":
 			if !m.searchMode {
@@ -259,7 +281,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.cursor = 0
 					}
 					m.updateScroll()
-					return m, nil
+					return m, tea.Batch(cmds...)
 				}
 			}
 		case "right", "l":
@@ -271,12 +293,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.searchMode && !m.showRepoOptions {
 				if m.focusedPanel == 0 && m.cursor < len(m.projects) {
 					m.selectedProject = &m.projects[m.cursor]
-					return m, loadProjectRepos(*m.selectedProject.Name)
+					m.loadingRepos = true
+					m.repos = []git.GitRepository{}
+					return m, tea.Batch(append(cmds, m.reposSpinner.Tick, loadProjectRepos(*m.selectedProject.Name))...)
 				} else if m.focusedPanel == 1 && m.cursor < len(m.repos) {
 					m.selectedRepo = &m.repos[m.cursor]
 					m.showRepoOptions = true
 					m.cursor = 0
-					return m, nil
+					return m, tea.Batch(cmds...)
 				}
 			}
 		case "tab":
@@ -290,7 +314,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	return m, nil
+	return m, tea.Batch(cmds...)
 }
 
 func (m *model) updateScroll() {
@@ -310,6 +334,19 @@ func (m *model) updateScroll() {
 			m.reposScroll = m.cursor - visibleLines + 1
 		}
 	}
+}
+
+func (m model) renderLoadingAnimation(visibleLines int, message string, spinner spinner.Model) string {
+	var content strings.Builder
+
+	content.WriteString(fmt.Sprintf("  %s %s\n", spinner.View(), message))
+
+	// Fill remaining space
+	for i := 1; i < visibleLines; i++ {
+		content.WriteString("\n")
+	}
+
+	return content.String()
 }
 
 func (m *model) filterItems() {
@@ -348,9 +385,8 @@ func (m *model) filterItems() {
 func (m model) View() string {
 	// Calculate responsive layout with proper margins
 	instructionHeight := 2 // Reduced space for instructions
-	logoHeight := 1        // Space for small ASCII logo
 	searchHeight := 3      // Always reserve space for search bar
-	totalAvailableHeight := m.height - instructionHeight - logoHeight - searchHeight
+	totalAvailableHeight := m.height - instructionHeight - searchHeight
 
 	// Ensure we have enough space to work with
 	if totalAvailableHeight < 10 {
@@ -448,22 +484,26 @@ func (m model) View() string {
 		Height(leftContentHeight).
 		Render(reposTitle + "\n" + reposContent)
 
-	// Create right panel matching total left column height
-	rightPanelContent := "Right Panel\n\n(Reserved for future use)"
+	// Create right panel with logo
+	rightPanelLogoText := `   ▄████████  ▄███████▄      ███     ███    █▄   ▄█ 
+  ███    ███ ██▀     ▄██ ▀█████████▄ ███    ███ ███ 
+  ███    ███       ▄███▀    ▀███▀▀██ ███    ███ ███▌
+  ███    ███  ▀█▀▄███▀▄▄     ███   ▀ ███    ███ ███▌
+▀███████████   ▄███▀   ▀     ███     ███    ███ ███▌
+  ███    ███ ▄███▀           ███     ███    ███ ███ 
+  ███    ███ ███▄     ▄█     ███     ███    ███ ███ 
+  ███    █▀   ▀████████▀    ▄████▀   ████████▀  █▀`
+
+	rightPanelLogoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("12")).
+		Bold(true).
+		Align(lipgloss.Center)
+
+	rightPanelContent := rightPanelLogoStyle.Render(rightPanelLogoText)
 	rightPanel := rightPanelStyle.
 		Width(rightContentWidth).
 		Height(rightContentHeight).
 		Render(rightPanelContent)
-
-	// Create small ASCII logo
-	logoText := `▄▄█ AZTUI █▄▄`
-
-	logoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("12")).
-		Bold(true).
-		Align(lipgloss.Left)
-
-	logo := logoStyle.Render(logoText)
 
 	// Create search bar at the top (always reserve space)
 	var searchBar string
@@ -496,7 +536,6 @@ func (m model) View() string {
 		Align(lipgloss.Center)
 
 	return lipgloss.JoinVertical(lipgloss.Top,
-		logo,
 		searchBar,
 		content,
 		instructionsStyle.Render(instructions),
@@ -504,6 +543,11 @@ func (m model) View() string {
 }
 
 func (m model) renderProjects(visibleLines int) string {
+	// Show loading animation if projects are loading
+	if m.loadingProjects {
+		return m.renderLoadingAnimation(visibleLines, "Loading projects", m.projectsSpinner)
+	}
+
 	var content strings.Builder
 	linesUsed := 0
 
@@ -590,6 +634,11 @@ func (m model) renderProjects(visibleLines int) string {
 }
 
 func (m model) renderRepos(visibleLines int) string {
+	// Show loading animation if repos are loading
+	if m.loadingRepos {
+		return m.renderLoadingAnimation(visibleLines, "Loading repositories", m.reposSpinner)
+	}
+
 	var content strings.Builder
 	linesUsed := 0
 
@@ -713,6 +762,14 @@ func main() {
 		{name: "Release Tags", desc: "View and manage release tags"},
 	}
 
+	s1 := spinner.New()
+	s1.Spinner = spinner.Dot
+	s1.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
+	s2 := spinner.New()
+	s2.Spinner = spinner.Dot
+	s2.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
 	m := model{
 		projects:        []core.TeamProjectReference{},
 		repos:           []git.GitRepository{},
@@ -730,6 +787,10 @@ func main() {
 		searchQuery:     "",
 		filteredItems:   nil,
 		originalCursor:  0,
+		loadingProjects: true,
+		loadingRepos:    false,
+		projectsSpinner: s1,
+		reposSpinner:    s2,
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
