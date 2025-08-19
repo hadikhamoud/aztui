@@ -4,19 +4,22 @@ import (
 	"aztui/packages/internal/api/pipelines"
 	"aztui/packages/internal/api/projects"
 	"aztui/packages/internal/api/repos"
+	"aztui/packages/internal/autodetect"
+	"aztui/packages/internal/config"
 	"context"
 	"fmt"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/joho/godotenv"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/core"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
 	pipeline "github.com/microsoft/azure-devops-go-api/azuredevops/v7/pipelines"
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 var baseBoxStyle = lipgloss.NewStyle().
@@ -53,6 +56,20 @@ type runsLoadedMsg struct {
 	runs []pipeline.Run
 }
 
+type timelineLoadedMsg struct {
+	timeline *build.Timeline
+}
+
+type refreshMsg struct{}
+
+type autoRefreshMsg struct{}
+
+type autoSelectInProgressMsg struct{}
+
+type autoDetectCompleteMsg struct {
+	result *autodetect.AutoDetectResult
+}
+
 type repoOption struct {
 	name string
 	desc string
@@ -63,9 +80,11 @@ type model struct {
 	repos            []git.GitRepository
 	pipelines        []pipeline.Pipeline
 	runs             []pipeline.Run
+	timeline         *build.Timeline
 	showRepoOptions  bool
 	showPipelines    bool
 	showRuns         bool
+	showRunDetails   bool
 	focusedPanel     int
 	width            int
 	height           int
@@ -74,9 +93,11 @@ type model struct {
 	reposScroll      int
 	pipelinesScroll  int
 	runsScroll       int
+	timelineScroll   int
 	selectedProject  *core.TeamProjectReference
 	selectedRepo     *git.GitRepository
 	selectedPipeline *pipeline.Pipeline
+	selectedRun      *pipeline.Run
 	repoOptions      []repoOption
 	searchMode       bool
 	searchQuery      string
@@ -86,22 +107,31 @@ type model struct {
 	loadingRepos     bool
 	loadingPipelines bool
 	loadingRuns      bool
+	loadingTimeline  bool
+	autoRefresh      bool
+	autoSelected     bool
+	autoSelectRepo   *git.GitRepository
+	lastRefresh      time.Time
 	projectsSpinner  spinner.Model
 	reposSpinner     spinner.Model
 	pipelinesSpinner spinner.Model
 	runsSpinner      spinner.Model
+	timelineSpinner  spinner.Model
+	config           *config.Config
+	configModal      *config.ConfigModal
+	showConfigModal  bool
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.projectsSpinner.Tick, loadProjects())
+	if m.showConfigModal {
+		return m.configModal.Init()
+	}
+	return tea.Batch(m.projectsSpinner.Tick, loadProjects(m.config), autoDetectProjectAndRepo(m.config))
 }
 
-func loadProjects() tea.Cmd {
+func loadProjects(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		organizationUrl := os.Getenv("AZURE_ORG_URL")
-		personalAccessToken := os.Getenv("AZURE_PAT")
-
-		connection := azuredevops.NewPatConnection(organizationUrl, personalAccessToken)
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
 		ctx := context.Background()
 
 		projectsList, err := projects.GetProjects(ctx, connection)
@@ -112,12 +142,21 @@ func loadProjects() tea.Cmd {
 	}
 }
 
-func loadProjectRepos(projectName string) tea.Cmd {
+func autoDetectProjectAndRepo(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		organizationUrl := os.Getenv("AZURE_ORG_URL")
-		personalAccessToken := os.Getenv("AZURE_PAT")
+		ctx := context.Background()
+		result, err := autodetect.DetectProjectAndRepo(ctx, cfg)
+		if err != nil {
+			// Don't fail on auto-detection errors, just return empty result
+			return autoDetectCompleteMsg{result: &autodetect.AutoDetectResult{ShouldAutoLoad: false}}
+		}
+		return autoDetectCompleteMsg{result: result}
+	}
+}
 
-		connection := azuredevops.NewPatConnection(organizationUrl, personalAccessToken)
+func loadProjectRepos(projectName string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
 		ctx := context.Background()
 
 		reposList, err := repos.GetRepos(ctx, connection, projectName)
@@ -128,12 +167,9 @@ func loadProjectRepos(projectName string) tea.Cmd {
 	}
 }
 
-func loadRepoPipelines(projectName string, repoName string) tea.Cmd {
+func loadRepoPipelines(projectName string, repoName string, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		organizationUrl := os.Getenv("AZURE_ORG_URL")
-		personalAccessToken := os.Getenv("AZURE_PAT")
-
-		connection := azuredevops.NewPatConnection(organizationUrl, personalAccessToken)
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
 		ctx := context.Background()
 
 		pipelinesList, err := pipelines.GetPipelinesForRepo(ctx, connection, projectName, repoName)
@@ -144,12 +180,9 @@ func loadRepoPipelines(projectName string, repoName string) tea.Cmd {
 	}
 }
 
-func loadPipelineRuns(projectName string, pipelineID int) tea.Cmd {
+func loadPipelineRuns(projectName string, pipelineID int, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		organizationUrl := os.Getenv("AZURE_ORG_URL")
-		personalAccessToken := os.Getenv("AZURE_PAT")
-
-		connection := azuredevops.NewPatConnection(organizationUrl, personalAccessToken)
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
 		ctx := context.Background()
 
 		runsList, err := pipelines.GetRuns(ctx, connection, projectName, pipelineID)
@@ -160,9 +193,57 @@ func loadPipelineRuns(projectName string, pipelineID int) tea.Cmd {
 	}
 }
 
+func loadRunTimeline(projectName string, buildID int, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
+		ctx := context.Background()
+
+		timeline, err := pipelines.GetRunTimeline(ctx, connection, projectName, buildID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return timelineLoadedMsg{timeline: timeline}
+	}
+}
+
+func tick() tea.Cmd {
+	return tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
+		return autoRefreshMsg{}
+	})
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
+
+	// Handle config modal if shown
+	if m.showConfigModal {
+		switch msg := msg.(type) {
+		case config.ConfigCompleteMsg:
+			// Configuration is complete, switch to main app
+			m.config = msg.Config
+			m.showConfigModal = false
+			m.configModal = nil
+			m.loadingProjects = true
+			return m, tea.Batch(m.projectsSpinner.Tick, loadProjects(m.config), autoDetectProjectAndRepo(m.config))
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m.configModal, cmd = m.configModal.Update(msg)
+			return m, cmd
+		default:
+			m.configModal, cmd = m.configModal.Update(msg)
+			if m.configModal.IsCompleted() {
+				if m.config.IsComplete() {
+					m.showConfigModal = false
+					m.configModal = nil
+					m.loadingProjects = true
+					return m, tea.Batch(m.projectsSpinner.Tick, loadProjects(m.config), autoDetectProjectAndRepo(m.config))
+				}
+			}
+			return m, cmd
+		}
+	}
 
 	// Update spinners
 	if m.loadingProjects {
@@ -181,15 +262,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runsSpinner, cmd = m.runsSpinner.Update(msg)
 		cmds = append(cmds, cmd)
 	}
+	if m.loadingTimeline {
+		m.timelineSpinner, cmd = m.timelineSpinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
 	switch msg := msg.(type) {
 	case []core.TeamProjectReference:
 		m.projects = msg
 		m.loadingProjects = false
 		return m, tea.Batch(cmds...)
+	case autoDetectCompleteMsg:
+		if msg.result.ShouldAutoLoad {
+			// Find and select the matching project
+			for i, project := range m.projects {
+				if project.Id != nil && msg.result.Project != nil && msg.result.Project.Id != nil &&
+					*project.Id == *msg.result.Project.Id {
+					m.selectedProject = &m.projects[i]
+					m.cursor = i
+					m.loadingRepos = true
+					m.repos = []git.GitRepository{}
+
+					// Auto-select the repository when repos are loaded
+					m.autoSelectRepo = msg.result.Repository
+
+					cmds = append(cmds, m.reposSpinner.Tick, loadProjectRepos(*m.selectedProject.Name, m.config))
+					break
+				}
+			}
+		}
+		return m, tea.Batch(cmds...)
 	case projectLoadedMsg:
 		m.repos = msg.repos
 		m.loadingRepos = false
+
+		// Auto-select repository if we have one from auto-detection
+		if m.autoSelectRepo != nil {
+			for i, repo := range m.repos {
+				if repo.Id != nil && m.autoSelectRepo.Id != nil && *repo.Id == *m.autoSelectRepo.Id {
+					m.selectedRepo = &m.repos[i]
+					m.showRepoOptions = true
+					m.cursor = 0           // Focus on "Pipelines" option
+					m.autoSelectRepo = nil // Clear auto-selection
+					break
+				}
+			}
+		}
+
 		return m, tea.Batch(cmds...)
 	case pipelinesLoadedMsg:
 		m.pipelines = msg.pipelines
@@ -198,6 +317,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runsLoadedMsg:
 		m.runs = msg.runs
 		m.loadingRuns = false
+
+		// Check for in-progress runs and auto-select the first one
+		for i, run := range m.runs {
+			if run.State != nil && (*run.State == "inProgress" || *run.State == "notStarted") {
+				m.selectedRun = &m.runs[i]
+				m.showRuns = false
+				m.showRunDetails = true
+				m.loadingTimeline = true
+				m.timeline = nil
+				m.cursor = 0
+				m.autoRefresh = true
+				m.autoSelected = true
+
+				if m.selectedProject != nil && m.selectedRun.Id != nil {
+					cmds = append(cmds, m.timelineSpinner.Tick, loadRunTimeline(*m.selectedProject.Name, *m.selectedRun.Id, m.config), tick())
+				}
+				break
+			}
+		}
+
+		return m, tea.Batch(cmds...)
+	case timelineLoadedMsg:
+		m.timeline = msg.timeline
+		m.loadingTimeline = false
+		m.lastRefresh = time.Now()
+		return m, tea.Batch(cmds...)
+	case autoRefreshMsg:
+		if m.autoRefresh && m.showRunDetails && m.selectedProject != nil && m.selectedRun != nil && m.selectedRun.Id != nil {
+			return m, tea.Batch(append(cmds, loadRunTimeline(*m.selectedProject.Name, *m.selectedRun.Id, m.config), tick())...)
+		}
+		return m, tea.Batch(cmds...)
+	case refreshMsg:
+		if m.showRunDetails && m.selectedProject != nil && m.selectedRun != nil && m.selectedRun.Id != nil {
+			m.loadingTimeline = true
+			return m, tea.Batch(append(cmds, m.timelineSpinner.Tick, loadRunTimeline(*m.selectedProject.Name, *m.selectedRun.Id, m.config))...)
+		}
 		return m, tea.Batch(cmds...)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -229,7 +384,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 									m.loadingRepos = true
 									m.repos = []git.GitRepository{}
 									m.updateScroll()
-									return m, tea.Batch(append(cmds, m.reposSpinner.Tick, loadProjectRepos(*m.selectedProject.Name))...)
+									return m, tea.Batch(append(cmds, m.reposSpinner.Tick, loadProjectRepos(*m.selectedProject.Name, m.config))...)
 								}
 							}
 						}
@@ -279,6 +434,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "r":
+			if m.showRunDetails {
+				return m, tea.Batch(append(cmds, func() tea.Msg { return refreshMsg{} })...)
+			}
 		case "/":
 			if !m.showRepoOptions {
 				m.searchMode = true
@@ -289,7 +448,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 		case "escape", "esc", "backspace":
-			if m.showRuns {
+			if m.showRunDetails {
+				m.showRunDetails = false
+				m.showRuns = true
+				m.autoRefresh = false
+				m.autoSelected = false
+				// Find the cursor position for the selected run
+				foundRun := false
+				for i, run := range m.runs {
+					if m.selectedRun != nil && run.Id != nil && m.selectedRun.Id != nil && *run.Id == *m.selectedRun.Id {
+						m.cursor = i
+						foundRun = true
+						break
+					}
+				}
+				if !foundRun {
+					m.cursor = 0
+				}
+				m.updateScroll()
+				return m, tea.Batch(cmds...)
+			} else if m.showRuns {
 				m.showRuns = false
 				m.showPipelines = true
 				m.focusedPanel = 2
@@ -339,7 +517,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			if !m.searchMode {
-				if !m.showRepoOptions && !m.showPipelines && !m.showRuns {
+				if !m.showRepoOptions && !m.showPipelines && !m.showRuns && !m.showRunDetails {
 					if m.focusedPanel == 0 && m.cursor < len(m.projects)-1 {
 						m.cursor++
 						m.updateScroll()
@@ -355,11 +533,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if m.showRuns && m.cursor < len(m.runs)-1 {
 					m.cursor++
 					m.updateScroll()
+				} else if m.showRunDetails && m.timeline != nil && m.timeline.Records != nil && m.cursor < len(*m.timeline.Records)-1 {
+					m.cursor++
+					m.updateScroll()
 				}
 			}
 		case "left", "h":
 			if !m.searchMode {
-				if m.showRuns {
+				if m.showRunDetails {
+					m.showRunDetails = false
+					m.showRuns = true
+					m.autoRefresh = false
+					// Find the cursor position for the selected run
+					foundRun := false
+					for i, run := range m.runs {
+						if m.selectedRun != nil && run.Id != nil && m.selectedRun.Id != nil && *run.Id == *m.selectedRun.Id {
+							m.cursor = i
+							foundRun = true
+							break
+						}
+					}
+					if !foundRun {
+						m.cursor = 0
+					}
+					m.updateScroll()
+					return m, tea.Batch(cmds...)
+				} else if m.showRuns {
 					m.showRuns = false
 					m.showPipelines = true
 					m.focusedPanel = 2
@@ -412,8 +611,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			if !m.searchMode {
-				if m.showRuns {
-					// Handle run selection if needed
+				if m.showRunDetails {
+					// Handle step selection if needed
+					return m, tea.Batch(cmds...)
+				} else if m.showRuns && m.cursor < len(m.runs) {
+					m.selectedRun = &m.runs[m.cursor]
+					m.showRuns = false
+					m.showRunDetails = true
+					m.loadingTimeline = true
+					m.timeline = nil
+					m.cursor = 0
+					m.autoSelected = false // This is a manual selection
+
+					// Start auto-refresh for running builds
+					if m.selectedRun.State != nil && (*m.selectedRun.State == "inProgress" || *m.selectedRun.State == "notStarted") {
+						m.autoRefresh = true
+					}
+
+					if m.selectedProject != nil && m.selectedRun.Id != nil {
+						cmds = append(cmds, m.timelineSpinner.Tick, loadRunTimeline(*m.selectedProject.Name, *m.selectedRun.Id, m.config))
+						if m.autoRefresh {
+							cmds = append(cmds, tick())
+						}
+						return m, tea.Batch(cmds...)
+					}
 					return m, tea.Batch(cmds...)
 				} else if m.showPipelines && m.cursor < len(m.pipelines) {
 					m.selectedPipeline = &m.pipelines[m.cursor]
@@ -423,7 +644,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.runs = []pipeline.Run{}
 					m.cursor = 0
 					if m.selectedProject != nil && m.selectedPipeline.Id != nil {
-						return m, tea.Batch(append(cmds, m.runsSpinner.Tick, loadPipelineRuns(*m.selectedProject.Name, *m.selectedPipeline.Id))...)
+						return m, tea.Batch(append(cmds, m.runsSpinner.Tick, loadPipelineRuns(*m.selectedProject.Name, *m.selectedPipeline.Id, m.config))...)
 					}
 					return m, tea.Batch(cmds...)
 				} else if m.showRepoOptions {
@@ -435,7 +656,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.pipelines = []pipeline.Pipeline{}
 						m.cursor = 0
 						if m.selectedProject != nil && m.selectedRepo != nil {
-							return m, tea.Batch(append(cmds, m.pipelinesSpinner.Tick, loadRepoPipelines(*m.selectedProject.Name, *m.selectedRepo.Name))...)
+							return m, tea.Batch(append(cmds, m.pipelinesSpinner.Tick, loadRepoPipelines(*m.selectedProject.Name, *m.selectedRepo.Name, m.config))...)
 						}
 					}
 					return m, tea.Batch(cmds...)
@@ -443,7 +664,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedProject = &m.projects[m.cursor]
 					m.loadingRepos = true
 					m.repos = []git.GitRepository{}
-					return m, tea.Batch(append(cmds, m.reposSpinner.Tick, loadProjectRepos(*m.selectedProject.Name))...)
+					return m, tea.Batch(append(cmds, m.reposSpinner.Tick, loadProjectRepos(*m.selectedProject.Name, m.config))...)
 				} else if m.focusedPanel == 1 && m.cursor < len(m.repos) {
 					m.selectedRepo = &m.repos[m.cursor]
 					m.showRepoOptions = true
@@ -492,6 +713,12 @@ func (m *model) updateScroll() {
 			m.runsScroll = m.cursor
 		} else if m.cursor >= m.runsScroll+visibleLines {
 			m.runsScroll = m.cursor - visibleLines + 1
+		}
+	} else if m.showRunDetails {
+		if m.cursor < m.timelineScroll {
+			m.timelineScroll = m.cursor
+		} else if m.cursor >= m.timelineScroll+visibleLines {
+			m.timelineScroll = m.cursor - visibleLines + 1
 		}
 	}
 }
@@ -543,6 +770,11 @@ func (m *model) filterItems() {
 }
 
 func (m model) View() string {
+	// Show config modal if needed
+	if m.showConfigModal {
+		return m.configModal.View()
+	}
+
 	// Calculate responsive layout with proper margins
 	instructionHeight := 2 // Reduced space for instructions
 	searchHeight := 3      // Always reserve space for search bar
@@ -643,7 +875,13 @@ func (m model) View() string {
 	var rightPanelContent string
 	var rightPanelTitle string
 
-	if m.showRuns {
+	if m.showRunDetails {
+		rightPanelTitle = "┤ Run Details ├"
+		if m.selectedRun != nil && m.selectedRun.Name != nil {
+			rightPanelTitle = "┤ " + *m.selectedRun.Name + " ├"
+		}
+		rightPanelContent = m.renderRunDetails(rightContentHeight - 1)
+	} else if m.showRuns {
 		rightPanelTitle = "┤ Pipeline Runs ├"
 		if m.selectedPipeline != nil && m.selectedPipeline.Name != nil {
 			rightPanelTitle = "┤ " + *m.selectedPipeline.Name + " Runs ├"
@@ -689,7 +927,7 @@ func (m model) View() string {
 
 	// Update right panel style based on focus
 	rightStyle := rightPanelStyle.Copy()
-	if m.showPipelines || m.showRuns {
+	if m.showPipelines || m.showRuns || m.showRunDetails {
 		rightStyle = rightStyle.BorderForeground(lipgloss.Color("12"))
 	} else {
 		rightStyle = rightStyle.BorderForeground(lipgloss.Color("240"))
@@ -1054,9 +1292,125 @@ func (m model) renderRuns(visibleLines int) string {
 	return content.String()
 }
 
+func (m model) renderRunDetails(visibleLines int) string {
+	// Show loading animation if timeline is loading
+	if m.loadingTimeline {
+		return m.renderLoadingAnimation(visibleLines, "Loading timeline", m.timelineSpinner)
+	}
+
+	var content strings.Builder
+	linesUsed := 0
+
+	// Calculate content width for full-width highlighting
+	rightWidth := m.width - m.width/2
+	contentWidth := rightWidth - 6 // Account for borders, padding, and margin
+
+	if m.timeline == nil || m.timeline.Records == nil {
+		content.WriteString("  No timeline data available\n")
+		linesUsed++
+	} else {
+		// Show run status and auto-selection info
+		if m.autoSelected {
+			content.WriteString("  🚀 Auto-selected in-progress run\n")
+			linesUsed++
+		}
+
+		// Show refresh info
+		if m.autoRefresh {
+			refreshTime := "Never"
+			if !m.lastRefresh.IsZero() {
+				refreshTime = m.lastRefresh.Format("15:04:05")
+			}
+			content.WriteString(fmt.Sprintf("  🔄 Auto-refresh enabled (Last: %s)\n", refreshTime))
+			linesUsed++
+		}
+		content.WriteString("  Press 'r' to refresh manually, Esc to go back\n\n")
+		linesUsed += 2
+
+		// Show timeline records (steps)
+		records := *m.timeline.Records
+		start := m.timelineScroll
+		end := start + visibleLines - linesUsed
+		if end > len(records) {
+			end = len(records)
+		}
+
+		for i := start; i < end; i++ {
+			record := records[i]
+
+			// Format step display
+			stepName := "Unknown Step"
+			if record.Name != nil {
+				stepName = *record.Name
+			}
+
+			status := "Unknown"
+			statusColor := lipgloss.Color("240") // Gray
+			if record.State != nil {
+				status = string(*record.State)
+				switch *record.State {
+				case "completed":
+					if record.Result != nil && *record.Result == "succeeded" {
+						statusColor = lipgloss.Color("2") // Green
+						status = "✓ Succeeded"
+					} else {
+						statusColor = lipgloss.Color("1") // Red
+						status = "✗ Failed"
+					}
+				case "inProgress":
+					statusColor = lipgloss.Color("3") // Yellow
+					status = "⏳ Running"
+				case "pending":
+					statusColor = lipgloss.Color("240") // Gray
+					status = "⏸ Pending"
+				}
+			}
+
+			// Truncate step name if too long
+			maxStepLen := contentWidth - 20 // Leave space for status
+			if maxStepLen < 10 {
+				maxStepLen = 10
+			}
+			if len(stepName) > maxStepLen {
+				stepName = stepName[:maxStepLen-3] + "..."
+			}
+
+			line := fmt.Sprintf("  %-*s %s", maxStepLen, stepName, status)
+
+			// Apply color to status
+			statusStyle := lipgloss.NewStyle().Foreground(statusColor)
+			coloredLine := fmt.Sprintf("  %-*s %s", maxStepLen, stepName, statusStyle.Render(status))
+
+			if m.cursor == i {
+				// Create full-width highlight
+				paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+				coloredLine = fullWidthHighlightStyle.Render(paddedLine)
+			}
+
+			content.WriteString(coloredLine + "\n")
+			linesUsed++
+		}
+	}
+
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
+	}
+
+	return content.String()
+}
+
 func (m model) getInstructions() string {
 	if m.searchMode {
 		return "Type to search   •   ↑/↓ Navigate   •   Enter Select   •   Esc Cancel   •   q Quit"
+	}
+	if m.showRunDetails {
+		refreshText := ""
+		if m.autoRefresh {
+			refreshText = " (Auto-refresh ON)"
+		}
+		return "↑/↓ Navigate   •   r Refresh" + refreshText + "   •   Esc/← Back   •   q Quit"
 	}
 	if m.showRuns {
 		return "↑/↓ Navigate   •   Enter View Run   •   Esc/← Back   •   q Quit"
@@ -1071,9 +1425,10 @@ func (m model) getInstructions() string {
 }
 
 func main() {
-	err := godotenv.Load("../.env")
+	// Load configuration (don't use EnsureConfig as we want to handle empty values in the modal)
+	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		log.Fatal("Error loading configuration:", err)
 	}
 
 	repoOptions := []repoOption{
@@ -1098,14 +1453,27 @@ func main() {
 	s4.Spinner = spinner.Dot
 	s4.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
+	s5 := spinner.New()
+	s5.Spinner = spinner.Dot
+	s5.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
+	// Check if config is complete, if not show modal
+	showModal := !cfg.IsComplete()
+	var configModal *config.ConfigModal
+	if showModal {
+		configModal = config.NewConfigModal(cfg)
+	}
+
 	m := model{
 		projects:         []core.TeamProjectReference{},
 		repos:            []git.GitRepository{},
 		pipelines:        []pipeline.Pipeline{},
 		runs:             []pipeline.Run{},
+		timeline:         nil,
 		showRepoOptions:  false,
 		showPipelines:    false,
 		showRuns:         false,
+		showRunDetails:   false,
 		focusedPanel:     0,
 		width:            80,
 		height:           24,
@@ -1114,22 +1482,33 @@ func main() {
 		reposScroll:      0,
 		pipelinesScroll:  0,
 		runsScroll:       0,
+		timelineScroll:   0,
 		selectedProject:  nil,
 		selectedRepo:     nil,
 		selectedPipeline: nil,
+		selectedRun:      nil,
 		repoOptions:      repoOptions,
 		searchMode:       false,
 		searchQuery:      "",
 		filteredItems:    nil,
 		originalCursor:   0,
-		loadingProjects:  true,
+		loadingProjects:  !showModal, // Only start loading if config is complete
 		loadingRepos:     false,
 		loadingPipelines: false,
 		loadingRuns:      false,
+		loadingTimeline:  false,
+		autoRefresh:      false,
+		autoSelected:     false,
+		autoSelectRepo:   nil,
+		lastRefresh:      time.Time{},
 		projectsSpinner:  s1,
 		reposSpinner:     s2,
 		pipelinesSpinner: s3,
 		runsSpinner:      s4,
+		timelineSpinner:  s5,
+		config:           cfg,
+		configModal:      configModal,
+		showConfigModal:  showModal,
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {

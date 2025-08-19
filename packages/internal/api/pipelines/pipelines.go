@@ -3,6 +3,7 @@ package pipelines
 import (
 	"context"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/pipelines"
 )
 
@@ -49,4 +50,23 @@ func GetRuns(ctx context.Context, connection *azuredevops.Connection, projectNam
 		return nil, err
 	}
 	return runsList, nil
+}
+
+func GetRunTimeline(ctx context.Context, connection *azuredevops.Connection, projectName string, buildID int) (*build.Timeline, error) {
+	buildClient, err := build.NewClient(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+
+	timelineArgs := build.GetBuildTimelineArgs{
+		Project: &projectName,
+		BuildId: &buildID,
+	}
+
+	timeline, err := buildClient.GetBuildTimeline(ctx, timelineArgs)
+
+	if err != nil {
+		return nil, err
+	}
+	return timeline, nil
 }
