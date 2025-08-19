@@ -6,9 +6,11 @@ import (
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/pipelines"
 )
 
-func GetPipelines(ctx context.Context, connection *azuredevops.Connection) (*[]pipelines.Pipeline, error) {
+func GetPipelines(ctx context.Context, connection *azuredevops.Connection, projectName string) (*[]pipelines.Pipeline, error) {
 	PipelineClient := pipelines.NewClient(ctx, connection)
-	pipelinesListArgs := pipelines.ListPipelinesArgs{}
+	pipelinesListArgs := pipelines.ListPipelinesArgs{
+		Project: &projectName,
+	}
 
 	pipelinesList, err := PipelineClient.ListPipelines(ctx, pipelinesListArgs)
 
@@ -18,9 +20,26 @@ func GetPipelines(ctx context.Context, connection *azuredevops.Connection) (*[]p
 	return pipelinesList, nil
 }
 
-func GetRuns(ctx context.Context, connection *azuredevops.Connection, pipelineID int) (*[]pipelines.Run, error) {
+func GetPipelinesForRepo(ctx context.Context, connection *azuredevops.Connection, projectName string, repoName string) (*[]pipelines.Pipeline, error) {
+	allPipelines, err := GetPipelines(ctx, connection, projectName)
+	if err != nil {
+		return nil, err
+	}
+
+	var filteredPipelines []pipelines.Pipeline
+	for _, pipeline := range *allPipelines {
+		if pipeline.Name != nil && *pipeline.Name == repoName {
+			filteredPipelines = append(filteredPipelines, pipeline)
+		}
+	}
+
+	return &filteredPipelines, nil
+}
+
+func GetRuns(ctx context.Context, connection *azuredevops.Connection, projectName string, pipelineID int) (*[]pipelines.Run, error) {
 	PipelineClient := pipelines.NewClient(ctx, connection)
 	runsListArgs := pipelines.ListRunsArgs{
+		Project:    &projectName,
 		PipelineId: &pipelineID,
 	}
 

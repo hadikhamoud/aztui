@@ -1,6 +1,7 @@
 package main
 
 import (
+	"aztui/packages/internal/api/pipelines"
 	"aztui/packages/internal/api/projects"
 	"aztui/packages/internal/api/repos"
 	"context"
@@ -12,6 +13,7 @@ import (
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/core"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
+	pipeline "github.com/microsoft/azure-devops-go-api/azuredevops/v7/pipelines"
 	"log"
 	"os"
 	"strings"
@@ -43,32 +45,51 @@ type projectLoadedMsg struct {
 	repos []git.GitRepository
 }
 
+type pipelinesLoadedMsg struct {
+	pipelines []pipeline.Pipeline
+}
+
+type runsLoadedMsg struct {
+	runs []pipeline.Run
+}
+
 type repoOption struct {
 	name string
 	desc string
 }
 
 type model struct {
-	projects        []core.TeamProjectReference
-	repos           []git.GitRepository
-	showRepoOptions bool
-	focusedPanel    int
-	width           int
-	height          int
-	cursor          int
-	projectsScroll  int
-	reposScroll     int
-	selectedProject *core.TeamProjectReference
-	selectedRepo    *git.GitRepository
-	repoOptions     []repoOption
-	searchMode      bool
-	searchQuery     string
-	filteredItems   []interface{}
-	originalCursor  int
-	loadingProjects bool
-	loadingRepos    bool
-	projectsSpinner spinner.Model
-	reposSpinner    spinner.Model
+	projects         []core.TeamProjectReference
+	repos            []git.GitRepository
+	pipelines        []pipeline.Pipeline
+	runs             []pipeline.Run
+	showRepoOptions  bool
+	showPipelines    bool
+	showRuns         bool
+	focusedPanel     int
+	width            int
+	height           int
+	cursor           int
+	projectsScroll   int
+	reposScroll      int
+	pipelinesScroll  int
+	runsScroll       int
+	selectedProject  *core.TeamProjectReference
+	selectedRepo     *git.GitRepository
+	selectedPipeline *pipeline.Pipeline
+	repoOptions      []repoOption
+	searchMode       bool
+	searchQuery      string
+	filteredItems    []interface{}
+	originalCursor   int
+	loadingProjects  bool
+	loadingRepos     bool
+	loadingPipelines bool
+	loadingRuns      bool
+	projectsSpinner  spinner.Model
+	reposSpinner     spinner.Model
+	pipelinesSpinner spinner.Model
+	runsSpinner      spinner.Model
 }
 
 func (m model) Init() tea.Cmd {
@@ -107,6 +128,38 @@ func loadProjectRepos(projectName string) tea.Cmd {
 	}
 }
 
+func loadRepoPipelines(projectName string, repoName string) tea.Cmd {
+	return func() tea.Msg {
+		organizationUrl := os.Getenv("AZURE_ORG_URL")
+		personalAccessToken := os.Getenv("AZURE_PAT")
+
+		connection := azuredevops.NewPatConnection(organizationUrl, personalAccessToken)
+		ctx := context.Background()
+
+		pipelinesList, err := pipelines.GetPipelinesForRepo(ctx, connection, projectName, repoName)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return pipelinesLoadedMsg{pipelines: *pipelinesList}
+	}
+}
+
+func loadPipelineRuns(projectName string, pipelineID int) tea.Cmd {
+	return func() tea.Msg {
+		organizationUrl := os.Getenv("AZURE_ORG_URL")
+		personalAccessToken := os.Getenv("AZURE_PAT")
+
+		connection := azuredevops.NewPatConnection(organizationUrl, personalAccessToken)
+		ctx := context.Background()
+
+		runsList, err := pipelines.GetRuns(ctx, connection, projectName, pipelineID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return runsLoadedMsg{runs: *runsList}
+	}
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
@@ -120,6 +173,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reposSpinner, cmd = m.reposSpinner.Update(msg)
 		cmds = append(cmds, cmd)
 	}
+	if m.loadingPipelines {
+		m.pipelinesSpinner, cmd = m.pipelinesSpinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+	if m.loadingRuns {
+		m.runsSpinner, cmd = m.runsSpinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
 	switch msg := msg.(type) {
 	case []core.TeamProjectReference:
@@ -129,6 +190,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case projectLoadedMsg:
 		m.repos = msg.repos
 		m.loadingRepos = false
+		return m, tea.Batch(cmds...)
+	case pipelinesLoadedMsg:
+		m.pipelines = msg.pipelines
+		m.loadingPipelines = false
+		return m, tea.Batch(cmds...)
+	case runsLoadedMsg:
+		m.runs = msg.runs
+		m.loadingRuns = false
 		return m, tea.Batch(cmds...)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -220,7 +289,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 		case "escape", "esc", "backspace":
-			if m.showRepoOptions {
+			if m.showRuns {
+				m.showRuns = false
+				m.showPipelines = true
+				m.focusedPanel = 2
+				// Find the cursor position for the selected pipeline
+				foundPipeline := false
+				for i, pipeline := range m.pipelines {
+					if m.selectedPipeline != nil && pipeline.Id != nil && m.selectedPipeline.Id != nil && *pipeline.Id == *m.selectedPipeline.Id {
+						m.cursor = i
+						foundPipeline = true
+						break
+					}
+				}
+				if !foundPipeline {
+					m.cursor = 0
+				}
+				m.updateScroll()
+				return m, tea.Batch(cmds...)
+			} else if m.showPipelines {
+				m.showPipelines = false
+				m.showRepoOptions = true
+				m.cursor = 0 // Reset to "Pipelines" option
+				return m, tea.Batch(cmds...)
+			} else if m.showRepoOptions {
 				m.showRepoOptions = false
 				m.focusedPanel = 1
 				// Find the cursor position for the selected repo
@@ -247,7 +339,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down", "j":
 			if !m.searchMode {
-				if !m.showRepoOptions {
+				if !m.showRepoOptions && !m.showPipelines && !m.showRuns {
 					if m.focusedPanel == 0 && m.cursor < len(m.projects)-1 {
 						m.cursor++
 						m.updateScroll()
@@ -257,11 +349,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				} else if m.showRepoOptions && m.cursor < len(m.repoOptions)-1 {
 					m.cursor++
+				} else if m.showPipelines && m.cursor < len(m.pipelines)-1 {
+					m.cursor++
+					m.updateScroll()
+				} else if m.showRuns && m.cursor < len(m.runs)-1 {
+					m.cursor++
+					m.updateScroll()
 				}
 			}
 		case "left", "h":
 			if !m.searchMode {
-				if !m.showRepoOptions {
+				if m.showRuns {
+					m.showRuns = false
+					m.showPipelines = true
+					m.focusedPanel = 2
+					// Find the cursor position for the selected pipeline
+					foundPipeline := false
+					for i, pipeline := range m.pipelines {
+						if m.selectedPipeline != nil && pipeline.Id != nil && m.selectedPipeline.Id != nil && *pipeline.Id == *m.selectedPipeline.Id {
+							m.cursor = i
+							foundPipeline = true
+							break
+						}
+					}
+					if !foundPipeline {
+						m.cursor = 0
+					}
+					m.updateScroll()
+					return m, tea.Batch(cmds...)
+				} else if m.showPipelines {
+					m.showPipelines = false
+					m.showRepoOptions = true
+					m.cursor = 0 // Reset to "Pipelines" option
+					return m, tea.Batch(cmds...)
+				} else if !m.showRepoOptions {
 					m.focusedPanel = 0
 					m.cursor = 0
 				} else {
@@ -285,13 +406,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "right", "l":
-			if !m.searchMode && !m.showRepoOptions {
+			if !m.searchMode && !m.showRepoOptions && !m.showPipelines && !m.showRuns {
 				m.focusedPanel = 1
 				m.cursor = 0
 			}
 		case "enter":
-			if !m.searchMode && !m.showRepoOptions {
-				if m.focusedPanel == 0 && m.cursor < len(m.projects) {
+			if !m.searchMode {
+				if m.showRuns {
+					// Handle run selection if needed
+					return m, tea.Batch(cmds...)
+				} else if m.showPipelines && m.cursor < len(m.pipelines) {
+					m.selectedPipeline = &m.pipelines[m.cursor]
+					m.showPipelines = false
+					m.showRuns = true
+					m.loadingRuns = true
+					m.runs = []pipeline.Run{}
+					m.cursor = 0
+					if m.selectedProject != nil && m.selectedPipeline.Id != nil {
+						return m, tea.Batch(append(cmds, m.runsSpinner.Tick, loadPipelineRuns(*m.selectedProject.Name, *m.selectedPipeline.Id))...)
+					}
+					return m, tea.Batch(cmds...)
+				} else if m.showRepoOptions {
+					if m.cursor == 0 { // "Pipelines" option
+						m.showRepoOptions = false
+						m.showPipelines = true
+						m.focusedPanel = 2
+						m.loadingPipelines = true
+						m.pipelines = []pipeline.Pipeline{}
+						m.cursor = 0
+						if m.selectedProject != nil && m.selectedRepo != nil {
+							return m, tea.Batch(append(cmds, m.pipelinesSpinner.Tick, loadRepoPipelines(*m.selectedProject.Name, *m.selectedRepo.Name))...)
+						}
+					}
+					return m, tea.Batch(cmds...)
+				} else if m.focusedPanel == 0 && m.cursor < len(m.projects) {
 					m.selectedProject = &m.projects[m.cursor]
 					m.loadingRepos = true
 					m.repos = []git.GitRepository{}
@@ -332,6 +480,18 @@ func (m *model) updateScroll() {
 			m.reposScroll = m.cursor
 		} else if m.cursor >= m.reposScroll+visibleLines {
 			m.reposScroll = m.cursor - visibleLines + 1
+		}
+	} else if m.focusedPanel == 2 || m.showPipelines {
+		if m.cursor < m.pipelinesScroll {
+			m.pipelinesScroll = m.cursor
+		} else if m.cursor >= m.pipelinesScroll+visibleLines {
+			m.pipelinesScroll = m.cursor - visibleLines + 1
+		}
+	} else if m.showRuns {
+		if m.cursor < m.runsScroll {
+			m.runsScroll = m.cursor
+		} else if m.cursor >= m.runsScroll+visibleLines {
+			m.runsScroll = m.cursor - visibleLines + 1
 		}
 	}
 }
@@ -401,6 +561,7 @@ func (m model) View() string {
 	leftWidth := m.width / 2
 	rightWidth := m.width - leftWidth
 	leftBoxHeight := totalAvailableHeight / 2 // Each left box gets exactly half
+	rightBoxHeight := totalAvailableHeight    // Right panel takes full height
 
 	// Ensure minimum dimensions
 	if leftWidth < 20 {
@@ -414,12 +575,15 @@ func (m model) View() string {
 	if leftBoxHeight < 3 {
 		leftBoxHeight = 3
 	}
+	if rightBoxHeight < 6 {
+		rightBoxHeight = 6
+	}
 
 	// Calculate content area (subtract borders and padding)
 	leftContentWidth := leftWidth - 4
 	rightContentWidth := rightWidth - 4
 	leftContentHeight := leftBoxHeight - 4
-	rightContentHeight := (leftContentHeight+4)*2 - 4 // Right panel = total left column height minus borders
+	rightContentHeight := rightBoxHeight - 4 // Right panel content height
 
 	// Ensure content area is not negative and has reasonable minimums
 	if leftContentWidth < 5 {
@@ -427,15 +591,6 @@ func (m model) View() string {
 	}
 	if rightContentWidth < 5 {
 		rightContentWidth = 5
-	}
-	if leftContentHeight < 1 {
-		leftContentHeight = 1
-	}
-	if rightContentHeight < 1 {
-		rightContentHeight = 1
-	}
-	if rightContentWidth < 1 {
-		rightContentWidth = 1
 	}
 	if leftContentHeight < 1 {
 		leftContentHeight = 1
@@ -484,8 +639,26 @@ func (m model) View() string {
 		Height(leftContentHeight).
 		Render(reposTitle + "\n" + reposContent)
 
-	// Create right panel with logo
-	rightPanelLogoText := `   ▄████████  ▄███████▄      ███     ███    █▄   ▄█ 
+	// Create right panel content
+	var rightPanelContent string
+	var rightPanelTitle string
+
+	if m.showRuns {
+		rightPanelTitle = "┤ Pipeline Runs ├"
+		if m.selectedPipeline != nil && m.selectedPipeline.Name != nil {
+			rightPanelTitle = "┤ " + *m.selectedPipeline.Name + " Runs ├"
+		}
+		rightPanelContent = m.renderRuns(rightContentHeight - 1)
+	} else if m.showPipelines {
+		rightPanelTitle = "┤ Build Pipelines ├"
+		if m.selectedRepo != nil && m.selectedRepo.Name != nil {
+			rightPanelTitle = "┤ " + *m.selectedRepo.Name + " Pipelines ├"
+		}
+		rightPanelContent = m.renderPipelines(rightContentHeight - 1)
+	} else {
+		// Show logo
+		rightPanelTitle = ""
+		rightPanelLogoText := `   ▄████████  ▄███████▄      ███     ███    █▄   ▄█ 
   ███    ███ ██▀     ▄██ ▀█████████▄ ███    ███ ███ 
   ███    ███       ▄███▀    ▀███▀▀██ ███    ███ ███▌
   ███    ███  ▀█▀▄███▀▄▄     ███   ▀ ███    ███ ███▌
@@ -494,16 +667,38 @@ func (m model) View() string {
   ███    ███ ███▄     ▄█     ███     ███    ███ ███ 
   ███    █▀   ▀████████▀    ▄████▀   ████████▀  █▀`
 
-	rightPanelLogoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("12")).
-		Bold(true).
-		Align(lipgloss.Center)
+		rightPanelLogoStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("12")).
+			Bold(true).
+			Align(lipgloss.Center)
 
-	rightPanelContent := rightPanelLogoStyle.Render(rightPanelLogoText)
-	rightPanel := rightPanelStyle.
+		// Fill the content to match the expected height
+		logoLines := strings.Split(rightPanelLogoText, "\n")
+		var paddedContent strings.Builder
+		paddedContent.WriteString(rightPanelLogoStyle.Render(rightPanelLogoText))
+
+		// Add empty lines to fill remaining space
+		usedLines := len(logoLines)
+		availableLines := rightContentHeight - 1 // -1 for title
+		for i := usedLines; i < availableLines; i++ {
+			paddedContent.WriteString("\n")
+		}
+
+		rightPanelContent = paddedContent.String()
+	}
+
+	// Update right panel style based on focus
+	rightStyle := rightPanelStyle.Copy()
+	if m.showPipelines || m.showRuns {
+		rightStyle = rightStyle.BorderForeground(lipgloss.Color("12"))
+	} else {
+		rightStyle = rightStyle.BorderForeground(lipgloss.Color("240"))
+	}
+
+	rightPanel := rightStyle.
 		Width(rightContentWidth).
 		Height(rightContentHeight).
-		Render(rightPanelContent)
+		Render(rightPanelTitle + "\n" + rightPanelContent)
 
 	// Create search bar at the top (always reserve space)
 	var searchBar string
@@ -740,9 +935,134 @@ func (m model) renderRepos(visibleLines int) string {
 	return content.String()
 }
 
+func (m model) renderPipelines(visibleLines int) string {
+	// Show loading animation if pipelines are loading
+	if m.loadingPipelines {
+		return m.renderLoadingAnimation(visibleLines, "Loading pipelines", m.pipelinesSpinner)
+	}
+
+	var content strings.Builder
+	linesUsed := 0
+
+	// Calculate content width for full-width highlighting
+	rightWidth := m.width - m.width/2
+	contentWidth := rightWidth - 6 // Account for borders, padding, and margin
+
+	// Show pipelines list
+	start := m.pipelinesScroll
+	end := start + visibleLines
+	if end > len(m.pipelines) {
+		end = len(m.pipelines)
+	}
+
+	for i := start; i < end; i++ {
+		pipelineName := ""
+		if m.pipelines[i].Name != nil {
+			pipelineName = *m.pipelines[i].Name
+		}
+
+		// Truncate if too long
+		maxLen := contentWidth - 4
+		if maxLen < 1 {
+			maxLen = 1
+		}
+		if len(pipelineName) > maxLen {
+			pipelineName = pipelineName[:maxLen-3] + "..."
+		}
+
+		line := fmt.Sprintf("  %s", pipelineName)
+
+		if m.cursor == i {
+			// Create full-width highlight
+			paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+			line = fullWidthHighlightStyle.Render(paddedLine)
+		}
+
+		content.WriteString(line + "\n")
+		linesUsed++
+	}
+
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
+	}
+
+	return content.String()
+}
+
+func (m model) renderRuns(visibleLines int) string {
+	// Show loading animation if runs are loading
+	if m.loadingRuns {
+		return m.renderLoadingAnimation(visibleLines, "Loading runs", m.runsSpinner)
+	}
+
+	var content strings.Builder
+	linesUsed := 0
+
+	// Calculate content width for full-width highlighting
+	rightWidth := m.width - m.width/2
+	contentWidth := rightWidth - 6 // Account for borders, padding, and margin
+
+	// Show runs list
+	start := m.runsScroll
+	end := start + visibleLines
+	if end > len(m.runs) {
+		end = len(m.runs)
+	}
+
+	for i := start; i < end; i++ {
+		runDisplay := ""
+		if m.runs[i].Name != nil {
+			runDisplay = *m.runs[i].Name
+		} else if m.runs[i].Id != nil {
+			runDisplay = fmt.Sprintf("Run #%d", *m.runs[i].Id)
+		}
+
+		// Add status if available
+		if m.runs[i].State != nil {
+			runDisplay = fmt.Sprintf("%s (%s)", runDisplay, string(*m.runs[i].State))
+		}
+
+		// Truncate if too long
+		maxLen := contentWidth - 4
+		if maxLen < 1 {
+			maxLen = 1
+		}
+		if len(runDisplay) > maxLen {
+			runDisplay = runDisplay[:maxLen-3] + "..."
+		}
+
+		line := fmt.Sprintf("  %s", runDisplay)
+
+		if m.cursor == i {
+			// Create full-width highlight
+			paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+			line = fullWidthHighlightStyle.Render(paddedLine)
+		}
+
+		content.WriteString(line + "\n")
+		linesUsed++
+	}
+
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
+	}
+
+	return content.String()
+}
+
 func (m model) getInstructions() string {
 	if m.searchMode {
 		return "Type to search   •   ↑/↓ Navigate   •   Enter Select   •   Esc Cancel   •   q Quit"
+	}
+	if m.showRuns {
+		return "↑/↓ Navigate   •   Enter View Run   •   Esc/← Back   •   q Quit"
+	}
+	if m.showPipelines {
+		return "↑/↓ Navigate   •   Enter View Runs   •   Esc/← Back   •   q Quit"
 	}
 	if m.showRepoOptions {
 		return "↑/↓ Navigate   •   Enter Select   •   Esc/← Back   •   q Quit"
@@ -770,27 +1090,46 @@ func main() {
 	s2.Spinner = spinner.Dot
 	s2.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
+	s3 := spinner.New()
+	s3.Spinner = spinner.Dot
+	s3.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
+	s4 := spinner.New()
+	s4.Spinner = spinner.Dot
+	s4.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
 	m := model{
-		projects:        []core.TeamProjectReference{},
-		repos:           []git.GitRepository{},
-		showRepoOptions: false,
-		focusedPanel:    0,
-		width:           80,
-		height:          24,
-		cursor:          0,
-		projectsScroll:  0,
-		reposScroll:     0,
-		selectedProject: nil,
-		selectedRepo:    nil,
-		repoOptions:     repoOptions,
-		searchMode:      false,
-		searchQuery:     "",
-		filteredItems:   nil,
-		originalCursor:  0,
-		loadingProjects: true,
-		loadingRepos:    false,
-		projectsSpinner: s1,
-		reposSpinner:    s2,
+		projects:         []core.TeamProjectReference{},
+		repos:            []git.GitRepository{},
+		pipelines:        []pipeline.Pipeline{},
+		runs:             []pipeline.Run{},
+		showRepoOptions:  false,
+		showPipelines:    false,
+		showRuns:         false,
+		focusedPanel:     0,
+		width:            80,
+		height:           24,
+		cursor:           0,
+		projectsScroll:   0,
+		reposScroll:      0,
+		pipelinesScroll:  0,
+		runsScroll:       0,
+		selectedProject:  nil,
+		selectedRepo:     nil,
+		selectedPipeline: nil,
+		repoOptions:      repoOptions,
+		searchMode:       false,
+		searchQuery:      "",
+		filteredItems:    nil,
+		originalCursor:   0,
+		loadingProjects:  true,
+		loadingRepos:     false,
+		loadingPipelines: false,
+		loadingRuns:      false,
+		projectsSpinner:  s1,
+		reposSpinner:     s2,
+		pipelinesSpinner: s3,
+		runsSpinner:      s4,
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
