@@ -1,20 +1,24 @@
 package main
 
 import (
+	"aztui/packages/internal/api/identity"
 	"aztui/packages/internal/api/pipelines"
 	"aztui/packages/internal/api/projects"
+	"aztui/packages/internal/api/prs"
 	"aztui/packages/internal/api/repos"
 	"aztui/packages/internal/autodetect"
 	"aztui/packages/internal/config"
 	"context"
 	"fmt"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/core"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/graph"
 	pipeline "github.com/microsoft/azure-devops-go-api/azuredevops/v7/pipelines"
 	"log"
 	"os"
@@ -70,6 +74,22 @@ type autoDetectCompleteMsg struct {
 	result *autodetect.AutoDetectResult
 }
 
+type prsLoadedMsg struct {
+	prs []git.GitPullRequest
+}
+
+type branchesLoadedMsg struct {
+	branches []git.GitRef
+}
+
+type usersLoadedMsg struct {
+	users []graph.GraphUser
+}
+
+type prCreatedMsg struct {
+	pr *git.GitPullRequest
+}
+
 type repoOption struct {
 	name string
 	desc string
@@ -81,10 +101,15 @@ type model struct {
 	pipelines        []pipeline.Pipeline
 	runs             []pipeline.Run
 	timeline         *build.Timeline
+	prs              []git.GitPullRequest
+	branches         []git.GitRef
+	users            []graph.GraphUser
 	showRepoOptions  bool
 	showPipelines    bool
 	showRuns         bool
 	showRunDetails   bool
+	showPRs          bool
+	showPRCreate     bool
 	focusedPanel     int
 	width            int
 	height           int
@@ -94,32 +119,51 @@ type model struct {
 	pipelinesScroll  int
 	runsScroll       int
 	timelineScroll   int
+	prsScroll        int
 	selectedProject  *core.TeamProjectReference
 	selectedRepo     *git.GitRepository
 	selectedPipeline *pipeline.Pipeline
 	selectedRun      *pipeline.Run
+	selectedPR       *git.GitPullRequest
 	repoOptions      []repoOption
 	searchMode       bool
 	searchQuery      string
 	filteredItems    []interface{}
 	originalCursor   int
+	initialLoading   bool
 	loadingProjects  bool
 	loadingRepos     bool
 	loadingPipelines bool
 	loadingRuns      bool
 	loadingTimeline  bool
+	loadingPRs       bool
+	loadingBranches  bool
+	loadingUsers     bool
 	autoRefresh      bool
 	autoSelected     bool
 	autoSelectRepo   *git.GitRepository
+	autoDetectDone   bool
+	autoDetectResult *autodetect.AutoDetectResult
 	lastRefresh      time.Time
 	projectsSpinner  spinner.Model
 	reposSpinner     spinner.Model
 	pipelinesSpinner spinner.Model
 	runsSpinner      spinner.Model
 	timelineSpinner  spinner.Model
+	prsSpinner       spinner.Model
 	config           *config.Config
 	configModal      *config.ConfigModal
 	showConfigModal  bool
+	// PR Creation Modal fields
+	prCreateMode      bool
+	prTitleInput      textinput.Model
+	prDescInput       textinput.Model
+	prSourceBranch    *git.GitRef
+	prTargetBranch    *git.GitRef
+	prReviewers       []graph.GraphUser
+	prCreateStep      int
+	reviewerSearch    string
+	filteredReviewers []graph.GraphUser
 }
 
 func (m model) Init() tea.Cmd {
@@ -206,6 +250,111 @@ func loadRunTimeline(projectName string, buildID int, cfg *config.Config) tea.Cm
 	}
 }
 
+func loadRepoPRs(projectName string, repoID string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
+		ctx := context.Background()
+
+		prsList, err := prs.GetPRs(ctx, connection, projectName, repoID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return prsLoadedMsg{prs: *prsList}
+	}
+}
+
+func loadRepoBranches(projectName string, repoID string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
+		ctx := context.Background()
+
+		branchesList, err := prs.GetBranches(ctx, connection, projectName, repoID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return branchesLoadedMsg{branches: *branchesList}
+	}
+}
+
+func loadOrgUsers(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
+		ctx := context.Background()
+
+		usersList, err := identity.GetUsers(ctx, connection)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if usersList.GraphUsers != nil {
+			return usersLoadedMsg{users: *usersList.GraphUsers}
+		}
+		return usersLoadedMsg{users: []graph.GraphUser{}}
+	}
+}
+
+func loadLatestBranch(projectName string, repoID string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
+		ctx := context.Background()
+
+		branch, err := prs.GetLatestBranch(ctx, connection, projectName, repoID)
+		if err != nil {
+			log.Printf("Error getting latest branch: %v", err)
+			return nil
+		}
+
+		if branch != nil {
+			return branchesLoadedMsg{branches: []git.GitRef{*branch}}
+		}
+
+		return nil
+	}
+}
+
+func (m model) createPR() tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedProject == nil || m.selectedRepo == nil || m.selectedRepo.Id == nil ||
+			m.prSourceBranch == nil || m.prTargetBranch == nil {
+			return nil
+		}
+
+		connection := azuredevops.NewPatConnection(m.config.AzureOrgURL, m.config.AzurePAT)
+		ctx := context.Background()
+
+		// Create the PR request
+		title := m.prTitleInput.Value()
+		description := m.prDescInput.Value()
+		prRequest := &git.GitPullRequest{
+			Title:         &title,
+			Description:   &description,
+			SourceRefName: m.prSourceBranch.Name,
+			TargetRefName: m.prTargetBranch.Name,
+		}
+
+		// Add reviewers if any
+		if len(m.prReviewers) > 0 {
+			var reviewers []git.IdentityRefWithVote
+			for _, reviewer := range m.prReviewers {
+				if reviewer.Descriptor != nil {
+					reviewers = append(reviewers, git.IdentityRefWithVote{
+						Id: reviewer.Descriptor,
+					})
+				}
+			}
+			prRequest.Reviewers = &reviewers
+		}
+
+		repoID := m.selectedRepo.Id.String()
+		pr, err := prs.CreatePR(ctx, connection, *m.selectedProject.Name, repoID, prRequest)
+		if err != nil {
+			log.Printf("Error creating PR: %v", err)
+			return nil
+		}
+
+		return prCreatedMsg{pr: pr}
+	}
+}
+
 func tick() tea.Cmd {
 	return tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
 		return autoRefreshMsg{}
@@ -218,13 +367,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle config modal if shown
 	if m.showConfigModal {
+		// Update text inputs if in PR create mode
+		if m.prCreateMode {
+			var textCmd tea.Cmd
+			m.prTitleInput, textCmd = m.prTitleInput.Update(msg)
+			cmds = append(cmds, textCmd)
+
+			m.prDescInput, textCmd = m.prDescInput.Update(msg)
+			cmds = append(cmds, textCmd)
+		}
+
 		switch msg := msg.(type) {
 		case config.ConfigCompleteMsg:
 			// Configuration is complete, switch to main app
 			m.config = msg.Config
 			m.showConfigModal = false
 			m.configModal = nil
+			m.initialLoading = true
 			m.loadingProjects = true
+			m.autoDetectDone = false
 			return m, tea.Batch(m.projectsSpinner.Tick, loadProjects(m.config), autoDetectProjectAndRepo(m.config))
 		case tea.WindowSizeMsg:
 			m.width = msg.Width
@@ -237,7 +398,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.config.IsComplete() {
 					m.showConfigModal = false
 					m.configModal = nil
+					m.initialLoading = true
 					m.loadingProjects = true
+					m.autoDetectDone = false
 					return m, tea.Batch(m.projectsSpinner.Tick, loadProjects(m.config), autoDetectProjectAndRepo(m.config))
 				}
 			}
@@ -266,13 +429,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.timelineSpinner, cmd = m.timelineSpinner.Update(msg)
 		cmds = append(cmds, cmd)
 	}
+	if m.loadingPRs {
+		m.prsSpinner, cmd = m.prsSpinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
 	switch msg := msg.(type) {
 	case []core.TeamProjectReference:
 		m.projects = msg
 		m.loadingProjects = false
+
+		// Check if we can complete initial loading
+		if m.autoDetectDone {
+			m.initialLoading = false
+		}
 		return m, tea.Batch(cmds...)
 	case autoDetectCompleteMsg:
+		m.autoDetectDone = true
+		m.autoDetectResult = msg.result
+
+		// Check if we can complete initial loading
+		if !m.loadingProjects {
+			m.initialLoading = false
+		}
+
 		if msg.result.ShouldAutoLoad {
 			// Find and select the matching project
 			for i, project := range m.projects {
@@ -301,9 +481,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i, repo := range m.repos {
 				if repo.Id != nil && m.autoSelectRepo.Id != nil && *repo.Id == *m.autoSelectRepo.Id {
 					m.selectedRepo = &m.repos[i]
-					m.showRepoOptions = true
-					m.cursor = 0           // Focus on "Pipelines" option
+					// Instead of showing repo options, directly navigate to pipelines
+					m.showPipelines = true
+					m.focusedPanel = 2
+					m.loadingPipelines = true
+					m.pipelines = []pipeline.Pipeline{}
+					m.cursor = 0
 					m.autoSelectRepo = nil // Clear auto-selection
+
+					if m.selectedProject != nil && m.selectedRepo != nil {
+						cmds = append(cmds, m.pipelinesSpinner.Tick, loadRepoPipelines(*m.selectedProject.Name, *m.selectedRepo.Name, m.config))
+					}
 					break
 				}
 			}
@@ -343,6 +531,60 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadingTimeline = false
 		m.lastRefresh = time.Now()
 		return m, tea.Batch(cmds...)
+	case prsLoadedMsg:
+		m.prs = msg.prs
+		m.loadingPRs = false
+		return m, tea.Batch(cmds...)
+	case branchesLoadedMsg:
+		m.branches = msg.branches
+		m.loadingBranches = false
+
+		// Set default branches if in PR create mode
+		if m.prCreateMode {
+			// Set target branch to main/master by default
+			for _, branch := range m.branches {
+				if branch.Name != nil {
+					branchName := *branch.Name
+					if branchName == "refs/heads/main" || branchName == "refs/heads/master" {
+						m.prTargetBranch = &branch
+						break
+					}
+				}
+			}
+
+			// Auto-select the latest non-main branch as source
+			if m.prSourceBranch == nil {
+				for _, branch := range m.branches {
+					if branch.Name != nil {
+						branchName := *branch.Name
+						if branchName != "refs/heads/main" && branchName != "refs/heads/master" {
+							m.prSourceBranch = &branch
+							break
+						}
+					}
+				}
+			}
+		}
+		return m, tea.Batch(cmds...)
+	case usersLoadedMsg:
+		m.users = msg.users
+		m.loadingUsers = false
+
+		// Initialize filtered reviewers if in PR create mode
+		if m.prCreateMode {
+			m.filteredReviewers = m.users
+		}
+		return m, tea.Batch(cmds...)
+	case prCreatedMsg:
+		// PR created successfully, refresh the PR list
+		if m.selectedProject != nil && m.selectedRepo != nil && m.selectedRepo.Id != nil {
+			m.showPRCreate = false
+			m.prCreateMode = false
+			m.loadingPRs = true
+			repoID := m.selectedRepo.Id.String()
+			return m, tea.Batch(append(cmds, m.prsSpinner.Tick, loadRepoPRs(*m.selectedProject.Name, repoID, m.config))...)
+		}
+		return m, tea.Batch(cmds...)
 	case autoRefreshMsg:
 		if m.autoRefresh && m.showRunDetails && m.selectedProject != nil && m.selectedRun != nil && m.selectedRun.Id != nil {
 			return m, tea.Batch(append(cmds, loadRunTimeline(*m.selectedProject.Name, *m.selectedRun.Id, m.config), tick())...)
@@ -359,6 +601,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
+		// Handle character input for reviewer search
+		if m.prCreateMode && m.prCreateStep == 4 && !m.searchMode {
+			key := msg.String()
+			if key == "backspace" {
+				if len(m.reviewerSearch) > 0 {
+					m.reviewerSearch = m.reviewerSearch[:len(m.reviewerSearch)-1]
+					m.filterReviewers()
+					m.cursor = 0
+				}
+				return m, tea.Batch(cmds...)
+			} else if len(msg.Runes) > 0 && key != "up" && key != "down" && key != "enter" &&
+				key != "tab" && key != "escape" && key != "esc" && key != "q" && key != "ctrl+c" {
+				m.reviewerSearch += string(msg.Runes)
+				m.filterReviewers()
+				m.cursor = 0
+				return m, tea.Batch(cmds...)
+			}
+		}
+
 		if m.searchMode {
 			switch msg.String() {
 			case "escape", "esc":
@@ -448,7 +709,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 		case "escape", "esc", "backspace":
-			if m.showRunDetails {
+			if m.prCreateMode {
+				// Exit PR creation mode
+				m.showPRCreate = false
+				m.prCreateMode = false
+				m.prCreateStep = 0
+				m.cursor = 0
+				return m, tea.Batch(cmds...)
+			} else if m.showRunDetails {
 				m.showRunDetails = false
 				m.showRuns = true
 				m.autoRefresh = false
@@ -485,6 +753,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.updateScroll()
 				return m, tea.Batch(cmds...)
+			} else if m.showPRs {
+				m.showPRs = false
+				m.showRepoOptions = true
+				m.cursor = 1 // Reset to "Pull Requests" option
+				return m, tea.Batch(cmds...)
 			} else if m.showPipelines {
 				m.showPipelines = false
 				m.showRepoOptions = true
@@ -509,15 +782,83 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 		case "up", "k":
-			if !m.searchMode {
+			if m.prCreateMode && m.prCreateStep == 4 {
+				// Navigate through filtered reviewers
+				if m.cursor > 0 {
+					m.cursor--
+				}
+				return m, tea.Batch(cmds...)
+			} else if m.prCreateMode && (m.prCreateStep == 2 || m.prCreateStep == 3) {
+				// Navigate through branches
+				if m.prCreateStep == 2 { // Source branch selection
+					currentIndex := -1
+					for i, branch := range m.branches {
+						if m.prSourceBranch != nil && branch.Name != nil && m.prSourceBranch.Name != nil &&
+							*branch.Name == *m.prSourceBranch.Name {
+							currentIndex = i
+							break
+						}
+					}
+					if currentIndex > 0 {
+						m.prSourceBranch = &m.branches[currentIndex-1]
+					}
+				} else if m.prCreateStep == 3 { // Target branch selection
+					currentIndex := -1
+					for i, branch := range m.branches {
+						if m.prTargetBranch != nil && branch.Name != nil && m.prTargetBranch.Name != nil &&
+							*branch.Name == *m.prTargetBranch.Name {
+							currentIndex = i
+							break
+						}
+					}
+					if currentIndex > 0 {
+						m.prTargetBranch = &m.branches[currentIndex-1]
+					}
+				}
+				return m, tea.Batch(cmds...)
+			} else if !m.searchMode && !m.prCreateMode {
 				if m.cursor > 0 {
 					m.cursor--
 					m.updateScroll()
 				}
 			}
 		case "down", "j":
-			if !m.searchMode {
-				if !m.showRepoOptions && !m.showPipelines && !m.showRuns && !m.showRunDetails {
+			if m.prCreateMode && m.prCreateStep == 4 {
+				// Navigate through filtered reviewers
+				if m.cursor < len(m.filteredReviewers)-1 {
+					m.cursor++
+				}
+				return m, tea.Batch(cmds...)
+			} else if m.prCreateMode && (m.prCreateStep == 2 || m.prCreateStep == 3) {
+				// Navigate through branches
+				if m.prCreateStep == 2 { // Source branch selection
+					currentIndex := -1
+					for i, branch := range m.branches {
+						if m.prSourceBranch != nil && branch.Name != nil && m.prSourceBranch.Name != nil &&
+							*branch.Name == *m.prSourceBranch.Name {
+							currentIndex = i
+							break
+						}
+					}
+					if currentIndex < len(m.branches)-1 {
+						m.prSourceBranch = &m.branches[currentIndex+1]
+					}
+				} else if m.prCreateStep == 3 { // Target branch selection
+					currentIndex := -1
+					for i, branch := range m.branches {
+						if m.prTargetBranch != nil && branch.Name != nil && m.prTargetBranch.Name != nil &&
+							*branch.Name == *m.prTargetBranch.Name {
+							currentIndex = i
+							break
+						}
+					}
+					if currentIndex < len(m.branches)-1 {
+						m.prTargetBranch = &m.branches[currentIndex+1]
+					}
+				}
+				return m, tea.Batch(cmds...)
+			} else if !m.searchMode && !m.prCreateMode {
+				if !m.showRepoOptions && !m.showPipelines && !m.showRuns && !m.showRunDetails && !m.showPRs {
 					if m.focusedPanel == 0 && m.cursor < len(m.projects)-1 {
 						m.cursor++
 						m.updateScroll()
@@ -533,13 +874,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if m.showRuns && m.cursor < len(m.runs)-1 {
 					m.cursor++
 					m.updateScroll()
+				} else if m.showPRs && m.cursor < len(m.prs)-1 {
+					m.cursor++
+					m.updateScroll()
 				} else if m.showRunDetails && m.timeline != nil && m.timeline.Records != nil && m.cursor < len(*m.timeline.Records)-1 {
 					m.cursor++
 					m.updateScroll()
 				}
 			}
 		case "left", "h":
-			if !m.searchMode {
+			if !m.searchMode && !m.prCreateMode {
 				if m.showRunDetails {
 					m.showRunDetails = false
 					m.showRuns = true
@@ -576,6 +920,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.updateScroll()
 					return m, tea.Batch(cmds...)
+				} else if m.showPRs {
+					m.showPRs = false
+					m.showRepoOptions = true
+					m.cursor = 1 // Reset to "Pull Requests" option
+					return m, tea.Batch(cmds...)
 				} else if m.showPipelines {
 					m.showPipelines = false
 					m.showRepoOptions = true
@@ -605,12 +954,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "right", "l":
-			if !m.searchMode && !m.showRepoOptions && !m.showPipelines && !m.showRuns {
+			if !m.searchMode && !m.showRepoOptions && !m.showPipelines && !m.showRuns && !m.showPRs && !m.prCreateMode {
 				m.focusedPanel = 1
 				m.cursor = 0
 			}
 		case "enter":
-			if !m.searchMode {
+			if m.prCreateMode {
+				if m.prCreateStep == 4 && m.cursor < len(m.filteredReviewers) {
+					// Add reviewer
+					selectedUser := m.filteredReviewers[m.cursor]
+
+					// Check if already added
+					alreadyAdded := false
+					for _, reviewer := range m.prReviewers {
+						if reviewer.Descriptor != nil && selectedUser.Descriptor != nil &&
+							*reviewer.Descriptor == *selectedUser.Descriptor {
+							alreadyAdded = true
+							break
+						}
+					}
+
+					if !alreadyAdded {
+						m.prReviewers = append(m.prReviewers, selectedUser)
+					}
+					return m, tea.Batch(cmds...)
+				} else if m.prTitleInput.Value() != "" && m.prSourceBranch != nil && m.prTargetBranch != nil {
+					// Submit PR creation
+					return m, tea.Batch(append(cmds, m.createPR())...)
+				}
+				return m, tea.Batch(cmds...)
+			} else if !m.searchMode {
 				if m.showRunDetails {
 					// Handle step selection if needed
 					return m, tea.Batch(cmds...)
@@ -658,6 +1031,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if m.selectedProject != nil && m.selectedRepo != nil {
 							return m, tea.Batch(append(cmds, m.pipelinesSpinner.Tick, loadRepoPipelines(*m.selectedProject.Name, *m.selectedRepo.Name, m.config))...)
 						}
+					} else if m.cursor == 1 { // "Pull Requests" option
+						m.showRepoOptions = false
+						m.showPRs = true
+						m.focusedPanel = 2
+						m.loadingPRs = true
+						m.prs = []git.GitPullRequest{}
+						m.cursor = 0
+						if m.selectedProject != nil && m.selectedRepo != nil && m.selectedRepo.Id != nil {
+							repoID := m.selectedRepo.Id.String()
+							return m, tea.Batch(append(cmds, m.prsSpinner.Tick, loadRepoPRs(*m.selectedProject.Name, repoID, m.config))...)
+						}
 					}
 					return m, tea.Batch(cmds...)
 				} else if m.focusedPanel == 0 && m.cursor < len(m.projects) {
@@ -673,13 +1057,72 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "tab":
-			if !m.searchMode && !m.showRepoOptions {
+			if m.prCreateMode {
+				// Navigate between PR form fields
+				m.prCreateStep = (m.prCreateStep + 1) % 5 // 0: title, 1: desc, 2: source branch, 3: target branch, 4: reviewers
+
+				// Focus appropriate input
+				if m.prCreateStep == 0 {
+					m.prTitleInput.Focus()
+					m.prDescInput.Blur()
+				} else if m.prCreateStep == 1 {
+					m.prTitleInput.Blur()
+					m.prDescInput.Focus()
+				} else {
+					m.prTitleInput.Blur()
+					m.prDescInput.Blur()
+				}
+				return m, tea.Batch(cmds...)
+			} else if !m.searchMode && !m.showRepoOptions {
 				if m.focusedPanel == 0 {
 					m.focusedPanel = 1
 				} else {
 					m.focusedPanel = 0
 				}
 				m.cursor = 0
+			}
+		case "n":
+			if m.showPRs && !m.prCreateMode {
+				// Start PR creation process
+				m.showPRCreate = true
+				m.prCreateMode = true
+				m.prCreateStep = 0
+				m.cursor = 0
+				m.reviewerSearch = ""
+
+				// Initialize text inputs
+				m.prTitleInput = textinput.New()
+				m.prTitleInput.Placeholder = "Enter PR title..."
+				m.prTitleInput.Focus()
+				m.prTitleInput.Width = 50
+
+				m.prDescInput = textinput.New()
+				m.prDescInput.Placeholder = "Enter PR description..."
+				m.prDescInput.Width = 50
+
+				// Clear previous selections
+				m.prReviewers = []graph.GraphUser{}
+				m.prSourceBranch = nil
+				m.prTargetBranch = nil
+
+				// Load branches and users
+				if m.selectedProject != nil && m.selectedRepo != nil && m.selectedRepo.Id != nil {
+					repoID := m.selectedRepo.Id.String()
+					m.loadingBranches = true
+					m.loadingUsers = true
+					return m, tea.Batch(append(cmds,
+						loadRepoBranches(*m.selectedProject.Name, repoID, m.config),
+						loadOrgUsers(m.config))...)
+				}
+				return m, tea.Batch(cmds...)
+			}
+		case "x":
+			if m.prCreateMode && m.prCreateStep == 4 && len(m.prReviewers) > 0 {
+				// Remove the last added reviewer
+				if len(m.prReviewers) > 0 {
+					m.prReviewers = m.prReviewers[:len(m.prReviewers)-1]
+				}
+				return m, tea.Batch(cmds...)
 			}
 		}
 	}
@@ -714,6 +1157,12 @@ func (m *model) updateScroll() {
 		} else if m.cursor >= m.runsScroll+visibleLines {
 			m.runsScroll = m.cursor - visibleLines + 1
 		}
+	} else if m.showPRs {
+		if m.cursor < m.prsScroll {
+			m.prsScroll = m.cursor
+		} else if m.cursor >= m.prsScroll+visibleLines {
+			m.prsScroll = m.cursor - visibleLines + 1
+		}
 	} else if m.showRunDetails {
 		if m.cursor < m.timelineScroll {
 			m.timelineScroll = m.cursor
@@ -732,6 +1181,57 @@ func (m model) renderLoadingAnimation(visibleLines int, message string, spinner 
 	for i := 1; i < visibleLines; i++ {
 		content.WriteString("\n")
 	}
+
+	return content.String()
+}
+
+func (m model) renderInitialLoadingScreen() string {
+	logoText := `   ▄████████  ▄███████▄      ███     ███    █▄   ▄█ 
+   ███    ███ ██▀     ▄██ ▀█████████▄ ███    ███ ███ 
+   ███    ███       ▄███▀    ▀███▀▀██ ███    ███ ███▌
+   ███    ███  ▀█▀▄███▀▄▄     ███   ▀ ███    ███ ███▌
+ ▀███████████   ▄███▀   ▀     ███     ███    ███ ███▌
+   ███    ███ ▄███▀           ███     ███    ███ ███ 
+   ███    ███ ███▄     ▄█     ███     ███    ███ ███ 
+   ███    █▀   ▀████████▀    ▄████▀   ████████▀  █▀`
+
+	logoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("12")).
+		Bold(true).
+		Align(lipgloss.Center)
+
+	loadingText := ""
+	if m.loadingProjects && !m.autoDetectDone {
+		loadingText = fmt.Sprintf("\n\n%s Loading projects and detecting current repository...", m.projectsSpinner.View())
+	} else if m.loadingProjects {
+		loadingText = fmt.Sprintf("\n\n%s Loading projects...", m.projectsSpinner.View())
+	} else if !m.autoDetectDone {
+		loadingText = fmt.Sprintf("\n\n%s Detecting current repository...", m.projectsSpinner.View())
+	}
+
+	loadingStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Align(lipgloss.Center)
+
+	// Center everything vertically
+	contentHeight := 8 + 3 // Logo height + loading text
+	paddingTop := (m.height - contentHeight) / 2
+	if paddingTop < 0 {
+		paddingTop = 0
+	}
+
+	var content strings.Builder
+
+	// Add top padding
+	for i := 0; i < paddingTop; i++ {
+		content.WriteString("\n")
+	}
+
+	// Add logo
+	content.WriteString(logoStyle.Width(m.width).Render(logoText))
+
+	// Add loading text
+	content.WriteString(loadingStyle.Width(m.width).Render(loadingText))
 
 	return content.String()
 }
@@ -769,10 +1269,34 @@ func (m *model) filterItems() {
 	}
 }
 
+func (m *model) filterReviewers() {
+	m.filteredReviewers = nil
+
+	if m.reviewerSearch == "" {
+		m.filteredReviewers = m.users
+		return
+	}
+
+	query := strings.ToLower(m.reviewerSearch)
+
+	for _, user := range m.users {
+		if user.DisplayName != nil && strings.Contains(strings.ToLower(*user.DisplayName), query) {
+			m.filteredReviewers = append(m.filteredReviewers, user)
+		} else if user.MailAddress != nil && strings.Contains(strings.ToLower(*user.MailAddress), query) {
+			m.filteredReviewers = append(m.filteredReviewers, user)
+		}
+	}
+}
+
 func (m model) View() string {
 	// Show config modal if needed
 	if m.showConfigModal {
 		return m.configModal.View()
+	}
+
+	// Show initial loading screen with logo
+	if m.initialLoading {
+		return m.renderInitialLoadingScreen()
 	}
 
 	// Calculate responsive layout with proper margins
@@ -875,7 +1399,10 @@ func (m model) View() string {
 	var rightPanelContent string
 	var rightPanelTitle string
 
-	if m.showRunDetails {
+	if m.showPRCreate {
+		rightPanelTitle = "┤ Create Pull Request ├"
+		rightPanelContent = m.renderPRCreate(rightContentHeight - 1)
+	} else if m.showRunDetails {
 		rightPanelTitle = "┤ Run Details ├"
 		if m.selectedRun != nil && m.selectedRun.Name != nil {
 			rightPanelTitle = "┤ " + *m.selectedRun.Name + " ├"
@@ -887,6 +1414,12 @@ func (m model) View() string {
 			rightPanelTitle = "┤ " + *m.selectedPipeline.Name + " Runs ├"
 		}
 		rightPanelContent = m.renderRuns(rightContentHeight - 1)
+	} else if m.showPRs {
+		rightPanelTitle = "┤ Pull Requests ├"
+		if m.selectedRepo != nil && m.selectedRepo.Name != nil {
+			rightPanelTitle = "┤ " + *m.selectedRepo.Name + " PRs ├"
+		}
+		rightPanelContent = m.renderPRs(rightContentHeight - 1)
 	} else if m.showPipelines {
 		rightPanelTitle = "┤ Build Pipelines ├"
 		if m.selectedRepo != nil && m.selectedRepo.Name != nil {
@@ -927,7 +1460,7 @@ func (m model) View() string {
 
 	// Update right panel style based on focus
 	rightStyle := rightPanelStyle.Copy()
-	if m.showPipelines || m.showRuns || m.showRunDetails {
+	if m.showPipelines || m.showRuns || m.showRunDetails || m.showPRs || m.showPRCreate {
 		rightStyle = rightStyle.BorderForeground(lipgloss.Color("12"))
 	} else {
 		rightStyle = rightStyle.BorderForeground(lipgloss.Color("240"))
@@ -1186,6 +1719,14 @@ func (m model) renderPipelines(visibleLines int) string {
 	rightWidth := m.width - m.width/2
 	contentWidth := rightWidth - 6 // Account for borders, padding, and margin
 
+	// Show auto-detection success message if applicable
+	if m.autoDetectResult != nil && m.autoDetectResult.ShouldAutoLoad && m.selectedProject != nil && m.selectedRepo != nil {
+		successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // Green
+		content.WriteString(successStyle.Render("  🚀 Auto-detected current repository"))
+		content.WriteString("\n\n")
+		linesUsed += 2
+	}
+
 	// Show pipelines list
 	start := m.pipelinesScroll
 	end := start + visibleLines
@@ -1401,7 +1942,218 @@ func (m model) renderRunDetails(visibleLines int) string {
 	return content.String()
 }
 
+func (m model) renderPRs(visibleLines int) string {
+	// Show loading animation if PRs are loading
+	if m.loadingPRs {
+		return m.renderLoadingAnimation(visibleLines, "Loading pull requests", m.prsSpinner)
+	}
+
+	var content strings.Builder
+	linesUsed := 0
+
+	// Calculate content width for full-width highlighting
+	rightWidth := m.width - m.width/2
+	contentWidth := rightWidth - 6 // Account for borders, padding, and margin
+
+	// Show PRs list
+	start := m.prsScroll
+	end := start + visibleLines
+	if end > len(m.prs) {
+		end = len(m.prs)
+	}
+
+	for i := start; i < end; i++ {
+		pr := m.prs[i]
+		prDisplay := ""
+
+		if pr.Title != nil {
+			prDisplay = *pr.Title
+		} else if pr.PullRequestId != nil {
+			prDisplay = fmt.Sprintf("PR #%d", *pr.PullRequestId)
+		}
+
+		// Add status if available
+		if pr.Status != nil {
+			statusText := string(*pr.Status)
+			prDisplay = fmt.Sprintf("%s (%s)", prDisplay, statusText)
+		}
+
+		// Truncate if too long
+		maxLen := contentWidth - 4
+		if maxLen < 1 {
+			maxLen = 1
+		}
+		if len(prDisplay) > maxLen {
+			prDisplay = prDisplay[:maxLen-3] + "..."
+		}
+
+		line := fmt.Sprintf("  %s", prDisplay)
+
+		if m.cursor == i {
+			// Create full-width highlight
+			paddedLine := fmt.Sprintf("%-*s", contentWidth, line)
+			line = fullWidthHighlightStyle.Render(paddedLine)
+		}
+
+		content.WriteString(line + "\n")
+		linesUsed++
+	}
+
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
+	}
+
+	return content.String()
+}
+
+func (m model) renderPRCreate(visibleLines int) string {
+	var content strings.Builder
+	linesUsed := 0
+
+	if m.prCreateMode {
+		content.WriteString("  Create New Pull Request\n\n")
+		linesUsed += 2
+
+		// Show form fields with highlighting for current step
+		titleStyle := ""
+		if m.prCreateStep == 0 {
+			titleStyle = highlightStyle.Render("→ Title:")
+		} else {
+			titleStyle = "  Title:"
+		}
+		content.WriteString(titleStyle + "\n")
+		content.WriteString("  " + m.prTitleInput.View() + "\n\n")
+		linesUsed += 3
+
+		descStyle := ""
+		if m.prCreateStep == 1 {
+			descStyle = highlightStyle.Render("→ Description:")
+		} else {
+			descStyle = "  Description:"
+		}
+		content.WriteString(descStyle + "\n")
+		content.WriteString("  " + m.prDescInput.View() + "\n\n")
+		linesUsed += 3
+
+		// Show branch selection with highlighting
+		sourceStyle := ""
+		if m.prCreateStep == 2 {
+			sourceStyle = highlightStyle.Render("→ Source Branch:")
+		} else {
+			sourceStyle = "  Source Branch:"
+		}
+		content.WriteString(sourceStyle + " ")
+		if m.prSourceBranch != nil && m.prSourceBranch.Name != nil {
+			branchName := strings.TrimPrefix(*m.prSourceBranch.Name, "refs/heads/")
+			content.WriteString(branchName)
+		} else {
+			content.WriteString("(Select branch)")
+		}
+		if m.prCreateStep == 2 {
+			content.WriteString(" ↑/↓ to change")
+		}
+		content.WriteString("\n")
+		linesUsed++
+
+		targetStyle := ""
+		if m.prCreateStep == 3 {
+			targetStyle = highlightStyle.Render("→ Target Branch:")
+		} else {
+			targetStyle = "  Target Branch:"
+		}
+		content.WriteString(targetStyle + " ")
+		if m.prTargetBranch != nil && m.prTargetBranch.Name != nil {
+			branchName := strings.TrimPrefix(*m.prTargetBranch.Name, "refs/heads/")
+			content.WriteString(branchName)
+		} else {
+			content.WriteString("main")
+		}
+		if m.prCreateStep == 3 {
+			content.WriteString(" ↑/↓ to change")
+		}
+		content.WriteString("\n\n")
+		linesUsed += 2
+
+		reviewerStyle := ""
+		if m.prCreateStep == 4 {
+			reviewerStyle = highlightStyle.Render("→ Reviewers:")
+		} else {
+			reviewerStyle = "  Reviewers:"
+		}
+		content.WriteString(reviewerStyle + " ")
+		if len(m.prReviewers) > 0 {
+			for i, reviewer := range m.prReviewers {
+				if i > 0 {
+					content.WriteString(", ")
+				}
+				if reviewer.DisplayName != nil {
+					content.WriteString(*reviewer.DisplayName)
+				}
+			}
+		} else {
+			content.WriteString("(None selected)")
+		}
+		content.WriteString("\n")
+		linesUsed++
+
+		// Show reviewer search if step 4
+		if m.prCreateStep == 4 {
+			content.WriteString("  Search: " + m.reviewerSearch + "\n")
+			linesUsed++
+
+			// Show filtered reviewers
+			if len(m.filteredReviewers) > 0 {
+				content.WriteString("  Available reviewers:\n")
+				linesUsed++
+				for i, user := range m.filteredReviewers {
+					if i >= 5 { // Limit to 5 reviewers
+						break
+					}
+					prefix := "    "
+					if i == m.cursor {
+						prefix = "  → "
+					}
+					displayName := "Unknown User"
+					if user.DisplayName != nil {
+						displayName = *user.DisplayName
+					}
+					content.WriteString(prefix + displayName + "\n")
+					linesUsed++
+				}
+			}
+		}
+		content.WriteString("\n")
+		linesUsed++
+
+		// Show current step instructions
+		var instructions string
+		switch m.prCreateStep {
+		case 0, 1:
+			instructions = "  Type to edit   •   Tab: Next   •   Enter: Submit   •   Esc: Cancel"
+		case 2, 3:
+			instructions = "  ↑/↓: Select branch   •   Tab: Next   •   Enter: Submit   •   Esc: Cancel"
+		case 4:
+			instructions = "  Type to search   •   ↑/↓: Navigate   •   Enter: Add reviewer   •   x: Remove last   •   Tab: Next   •   Esc: Cancel"
+		}
+		content.WriteString(instructions + "\n")
+		linesUsed++
+	}
+
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
+	}
+
+	return content.String()
+}
+
 func (m model) getInstructions() string {
+	if m.prCreateMode {
+		return "Tab Navigate   •   Enter Submit   •   Esc Cancel   •   q Quit"
+	}
 	if m.searchMode {
 		return "Type to search   •   ↑/↓ Navigate   •   Enter Select   •   Esc Cancel   •   q Quit"
 	}
@@ -1414,6 +2166,9 @@ func (m model) getInstructions() string {
 	}
 	if m.showRuns {
 		return "↑/↓ Navigate   •   Enter View Run   •   Esc/← Back   •   q Quit"
+	}
+	if m.showPRs {
+		return "↑/↓ Navigate   •   n New PR   •   Esc/← Back   •   q Quit"
 	}
 	if m.showPipelines {
 		return "↑/↓ Navigate   •   Enter View Runs   •   Esc/← Back   •   q Quit"
@@ -1457,6 +2212,10 @@ func main() {
 	s5.Spinner = spinner.Dot
 	s5.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
+	s6 := spinner.New()
+	s6.Spinner = spinner.Dot
+	s6.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
 	// Check if config is complete, if not show modal
 	showModal := !cfg.IsComplete()
 	var configModal *config.ConfigModal
@@ -1465,50 +2224,73 @@ func main() {
 	}
 
 	m := model{
-		projects:         []core.TeamProjectReference{},
-		repos:            []git.GitRepository{},
-		pipelines:        []pipeline.Pipeline{},
-		runs:             []pipeline.Run{},
-		timeline:         nil,
-		showRepoOptions:  false,
-		showPipelines:    false,
-		showRuns:         false,
-		showRunDetails:   false,
-		focusedPanel:     0,
-		width:            80,
-		height:           24,
-		cursor:           0,
-		projectsScroll:   0,
-		reposScroll:      0,
-		pipelinesScroll:  0,
-		runsScroll:       0,
-		timelineScroll:   0,
-		selectedProject:  nil,
-		selectedRepo:     nil,
-		selectedPipeline: nil,
-		selectedRun:      nil,
-		repoOptions:      repoOptions,
-		searchMode:       false,
-		searchQuery:      "",
-		filteredItems:    nil,
-		originalCursor:   0,
-		loadingProjects:  !showModal, // Only start loading if config is complete
-		loadingRepos:     false,
-		loadingPipelines: false,
-		loadingRuns:      false,
-		loadingTimeline:  false,
-		autoRefresh:      false,
-		autoSelected:     false,
-		autoSelectRepo:   nil,
-		lastRefresh:      time.Time{},
-		projectsSpinner:  s1,
-		reposSpinner:     s2,
-		pipelinesSpinner: s3,
-		runsSpinner:      s4,
-		timelineSpinner:  s5,
-		config:           cfg,
-		configModal:      configModal,
-		showConfigModal:  showModal,
+		projects:          []core.TeamProjectReference{},
+		repos:             []git.GitRepository{},
+		pipelines:         []pipeline.Pipeline{},
+		runs:              []pipeline.Run{},
+		timeline:          nil,
+		prs:               []git.GitPullRequest{},
+		branches:          []git.GitRef{},
+		users:             []graph.GraphUser{},
+		showRepoOptions:   false,
+		showPipelines:     false,
+		showRuns:          false,
+		showRunDetails:    false,
+		showPRs:           false,
+		showPRCreate:      false,
+		focusedPanel:      0,
+		width:             80,
+		height:            24,
+		cursor:            0,
+		projectsScroll:    0,
+		reposScroll:       0,
+		pipelinesScroll:   0,
+		runsScroll:        0,
+		timelineScroll:    0,
+		prsScroll:         0,
+		selectedProject:   nil,
+		selectedRepo:      nil,
+		selectedPipeline:  nil,
+		selectedRun:       nil,
+		selectedPR:        nil,
+		repoOptions:       repoOptions,
+		searchMode:        false,
+		searchQuery:       "",
+		filteredItems:     nil,
+		originalCursor:    0,
+		initialLoading:    !showModal, // Show initial loading if config is complete
+		loadingProjects:   !showModal, // Only start loading if config is complete
+		loadingRepos:      false,
+		loadingPipelines:  false,
+		loadingRuns:       false,
+		loadingTimeline:   false,
+		loadingPRs:        false,
+		loadingBranches:   false,
+		loadingUsers:      false,
+		autoRefresh:       false,
+		autoSelected:      false,
+		autoSelectRepo:    nil,
+		autoDetectDone:    false,
+		autoDetectResult:  nil,
+		lastRefresh:       time.Time{},
+		projectsSpinner:   s1,
+		reposSpinner:      s2,
+		pipelinesSpinner:  s3,
+		runsSpinner:       s4,
+		timelineSpinner:   s5,
+		prsSpinner:        s6,
+		config:            cfg,
+		configModal:       configModal,
+		showConfigModal:   showModal,
+		prCreateMode:      false,
+		prTitleInput:      textinput.New(),
+		prDescInput:       textinput.New(),
+		prSourceBranch:    nil,
+		prTargetBranch:    nil,
+		prReviewers:       []graph.GraphUser{},
+		prCreateStep:      0,
+		reviewerSearch:    "",
+		filteredReviewers: []graph.GraphUser{},
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
