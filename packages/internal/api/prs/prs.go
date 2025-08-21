@@ -2,6 +2,7 @@ package prs
 
 import (
 	"context"
+	"fmt"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
 )
@@ -125,6 +126,173 @@ func GetLatestBranch(ctx context.Context, connection *azuredevops.Connection, Pr
 
 func intPtr(i int) *int {
 	return &i
+}
+
+func ApprovePR(ctx context.Context, connection *azuredevops.Connection, ProjectName string, RepositoryId string, pullRequestId int, vote int, comment string) error {
+	gitClient, err := git.NewClient(ctx, connection)
+	if err != nil {
+		return err
+	}
+
+	// Step 1: Always add a comment first - this ensures the user becomes a reviewer
+	actualComment := comment
+	if actualComment == "" {
+		// Add a default comment if none provided
+		if vote == 10 {
+			actualComment = "Approved"
+		} else if vote == -10 {
+			actualComment = "Declined"
+		} else {
+			actualComment = "Reviewed"
+		}
+	}
+
+	threadArgs := git.CreateThreadArgs{
+		RepositoryId:  &RepositoryId,
+		PullRequestId: &pullRequestId,
+		Project:       &ProjectName,
+		CommentThread: &git.GitPullRequestCommentThread{
+			Comments: &[]git.Comment{
+				{
+					Content: &actualComment,
+				},
+			},
+		},
+	}
+
+	_, err = gitClient.CreateThread(ctx, threadArgs)
+	if err != nil {
+		return fmt.Errorf("failed to add comment: %v", err)
+	}
+
+	// Step 2: Get the PR to find all reviewers including the current user
+	getPRArgs := git.GetPullRequestArgs{
+		RepositoryId:  &RepositoryId,
+		PullRequestId: &pullRequestId,
+		Project:       &ProjectName,
+	}
+
+	pr, err := gitClient.GetPullRequest(ctx, getPRArgs)
+	if err != nil {
+		return fmt.Errorf("failed to get PR details: %v", err)
+	}
+
+	// Step 3: Find and update the current user's reviewer vote
+	if pr.Reviewers == nil || len(*pr.Reviewers) == 0 {
+		return fmt.Errorf("no reviewers found on PR")
+	}
+
+	// Set appropriate flags based on vote value
+	isRequired := false
+	isFlagged := false
+	hasDeclined := false
+
+	switch vote {
+	case -10: // Rejected
+		hasDeclined = true
+	case -5: // Waiting for author
+		isFlagged = true
+	}
+
+	// Try to update each reviewer until one succeeds (the current user should be among them)
+	var lastError error
+	for _, reviewer := range *pr.Reviewers {
+		if reviewer.Id != nil {
+			updateArgs := git.UpdatePullRequestReviewerArgs{
+				RepositoryId:  &RepositoryId,
+				PullRequestId: &pullRequestId,
+				Project:       &ProjectName,
+				ReviewerId:    reviewer.Id,
+				Reviewer: &git.IdentityRefWithVote{
+					Vote:        &vote,
+					IsRequired:  &isRequired,
+					IsFlagged:   &isFlagged,
+					HasDeclined: &hasDeclined,
+				},
+			}
+
+			_, err = gitClient.UpdatePullRequestReviewer(ctx, updateArgs)
+			if err == nil {
+				// Successfully updated - we found the right reviewer
+				return nil
+			}
+			lastError = err
+			// Continue to try next reviewer
+		}
+	}
+
+	if lastError != nil {
+		return fmt.Errorf("failed to update reviewer vote: %v", lastError)
+	}
+
+	return fmt.Errorf("no valid reviewers found to update")
+}
+
+func CompletePR(ctx context.Context, connection *azuredevops.Connection, ProjectName string, RepositoryId string, pullRequestId int, completionOptions *git.GitPullRequestCompletionOptions) (*git.GitPullRequest, error) {
+	gitClient, err := git.NewClient(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update PR to completed status
+	prUpdate := &git.GitPullRequest{
+		Status:            &git.PullRequestStatusValues.Completed,
+		CompletionOptions: completionOptions,
+	}
+
+	updateArgs := git.UpdatePullRequestArgs{
+		RepositoryId:           &RepositoryId,
+		PullRequestId:          &pullRequestId,
+		Project:                &ProjectName,
+		GitPullRequestToUpdate: prUpdate,
+	}
+
+	pr, err := gitClient.UpdatePullRequest(ctx, updateArgs)
+	if err != nil {
+		return nil, err
+	}
+
+	return pr, nil
+}
+
+func GetPRDetails(ctx context.Context, connection *azuredevops.Connection, ProjectName string, RepositoryId string, pullRequestId int) (*git.GitPullRequest, error) {
+	gitClient, err := git.NewClient(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+
+	getPRArgs := git.GetPullRequestArgs{
+		RepositoryId:  &RepositoryId,
+		PullRequestId: &pullRequestId,
+		Project:       &ProjectName,
+	}
+
+	pr, err := gitClient.GetPullRequest(ctx, getPRArgs)
+	if err != nil {
+		return nil, err
+	}
+
+	return pr, nil
+}
+
+func GetPRComments(ctx context.Context, connection *azuredevops.Connection, ProjectName string, RepositoryId string, pullRequestId int) (*[]git.GitPullRequestCommentThread, error) {
+	gitClient, err := git.NewClient(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+
+	getThreadsArgs := git.GetThreadsArgs{
+		RepositoryId:  &RepositoryId,
+		PullRequestId: &pullRequestId,
+		Project:       &ProjectName,
+	}
+
+	threads, err := gitClient.GetThreads(ctx, getThreadsArgs)
+	if err != nil {
+		return nil, err
+	}
+
+	return threads, nil
 }
 
 func stringPtr(s string) *string {

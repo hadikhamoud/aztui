@@ -90,6 +90,20 @@ type prCreatedMsg struct {
 	pr *git.GitPullRequest
 }
 
+type prDetailsLoadedMsg struct {
+	pr *git.GitPullRequest
+}
+
+type prCommentsLoadedMsg struct {
+	comments []git.GitPullRequestCommentThread
+}
+
+type prActionCompleteMsg struct {
+	action  string
+	success bool
+	message string
+}
+
 type repoOption struct {
 	name string
 	desc string
@@ -164,6 +178,22 @@ type model struct {
 	prCreateStep      int
 	reviewerSearch    string
 	filteredReviewers []graph.GraphUser
+	// PR Details fields
+	showPRDetails     bool
+	prDetails         *git.GitPullRequest
+	prComments        []git.GitPullRequestCommentThread
+	loadingPRDetails  bool
+	loadingPRComments bool
+	prDetailsSpinner  spinner.Model
+	// PR Review fields
+	showPRReview    bool
+	prReviewMode    bool
+	prReviewAction  string // "approve", "decline", "override"
+	prOverrideInput textinput.Model
+	prCommentInput  textinput.Model
+	prOverrideMode  bool
+	prActionMessage string
+	prActionTime    time.Time
 }
 
 func (m model) Init() tea.Cmd {
@@ -311,6 +341,101 @@ func loadLatestBranch(projectName string, repoID string, cfg *config.Config) tea
 	}
 }
 
+func loadPRDetails(projectName string, repoID string, prID int, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
+		ctx := context.Background()
+
+		pr, err := prs.GetPRDetails(ctx, connection, projectName, repoID, prID)
+		if err != nil {
+			log.Printf("Error getting PR details: %v", err)
+			return nil
+		}
+
+		return prDetailsLoadedMsg{pr: pr}
+	}
+}
+
+func loadPRComments(projectName string, repoID string, prID int, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		connection := azuredevops.NewPatConnection(cfg.AzureOrgURL, cfg.AzurePAT)
+		ctx := context.Background()
+
+		comments, err := prs.GetPRComments(ctx, connection, projectName, repoID, prID)
+		if err != nil {
+			log.Printf("Error getting PR comments: %v", err)
+			return prCommentsLoadedMsg{comments: []git.GitPullRequestCommentThread{}}
+		}
+
+		if comments != nil {
+			return prCommentsLoadedMsg{comments: *comments}
+		}
+
+		return prCommentsLoadedMsg{comments: []git.GitPullRequestCommentThread{}}
+	}
+}
+
+func (m model) approvePR(vote int, comment string) tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedProject == nil || m.selectedRepo == nil || m.selectedPR == nil ||
+			m.selectedRepo.Id == nil || m.selectedPR.PullRequestId == nil {
+			return prActionCompleteMsg{action: "approve", success: false}
+		}
+
+		connection := azuredevops.NewPatConnection(m.config.AzureOrgURL, m.config.AzurePAT)
+		ctx := context.Background()
+
+		repoID := m.selectedRepo.Id.String()
+		prID := *m.selectedPR.PullRequestId
+
+		err := prs.ApprovePR(ctx, connection, *m.selectedProject.Name, repoID, prID, vote, comment)
+		if err != nil {
+			log.Printf("Error approving PR: %v", err)
+			return prActionCompleteMsg{action: "approve", success: false, message: fmt.Sprintf("Failed to approve PR: %v", err)}
+		}
+
+		var actionText string
+		if vote == 10 {
+			actionText = "PR approved successfully"
+		} else if vote == -10 {
+			actionText = "PR declined successfully"
+		} else {
+			actionText = "PR vote submitted successfully"
+		}
+		return prActionCompleteMsg{action: "approve", success: true, message: actionText}
+	}
+}
+
+func (m model) overridePR(overrideMessage string) tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedProject == nil || m.selectedRepo == nil || m.selectedPR == nil ||
+			m.selectedRepo.Id == nil || m.selectedPR.PullRequestId == nil {
+			return prActionCompleteMsg{action: "override", success: false}
+		}
+
+		connection := azuredevops.NewPatConnection(m.config.AzureOrgURL, m.config.AzurePAT)
+		ctx := context.Background()
+
+		repoID := m.selectedRepo.Id.String()
+		prID := *m.selectedPR.PullRequestId
+
+		// Create completion options with override
+		deleteBranch := false
+		completionOptions := &git.GitPullRequestCompletionOptions{
+			DeleteSourceBranch: &deleteBranch, // Don't delete source branch by default
+		}
+
+		// Complete the PR with override
+		_, err := prs.CompletePR(ctx, connection, *m.selectedProject.Name, repoID, prID, completionOptions)
+		if err != nil {
+			log.Printf("Error overriding PR: %v", err)
+			return prActionCompleteMsg{action: "override", success: false, message: fmt.Sprintf("Failed to override PR: %v", err)}
+		}
+
+		return prActionCompleteMsg{action: "override", success: true, message: "PR completed with override"}
+	}
+}
+
 func (m model) createPR() tea.Cmd {
 	return func() tea.Msg {
 		if m.selectedProject == nil || m.selectedRepo == nil || m.selectedRepo.Id == nil ||
@@ -377,6 +502,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, textCmd)
 		}
 
+		// Update text inputs if in override mode
+		if m.prOverrideMode {
+			var textCmd tea.Cmd
+			m.prOverrideInput, textCmd = m.prOverrideInput.Update(msg)
+			cmds = append(cmds, textCmd)
+		}
+
 		switch msg := msg.(type) {
 		case config.ConfigCompleteMsg:
 			// Configuration is complete, switch to main app
@@ -431,6 +563,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.loadingPRs {
 		m.prsSpinner, cmd = m.prsSpinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+	if m.loadingPRDetails {
+		m.prDetailsSpinner, cmd = m.prDetailsSpinner.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -585,6 +721,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(append(cmds, m.prsSpinner.Tick, loadRepoPRs(*m.selectedProject.Name, repoID, m.config))...)
 		}
 		return m, tea.Batch(cmds...)
+	case prDetailsLoadedMsg:
+		m.prDetails = msg.pr
+		m.loadingPRDetails = false
+		return m, tea.Batch(cmds...)
+	case prCommentsLoadedMsg:
+		m.prComments = msg.comments
+		m.loadingPRComments = false
+		return m, tea.Batch(cmds...)
+	case prActionCompleteMsg:
+		// Store action message and timestamp
+		m.prActionMessage = msg.message
+		m.prActionTime = time.Now()
+
+		// PR action completed, refresh PR details and list
+		if msg.success && m.selectedProject != nil && m.selectedRepo != nil && m.selectedRepo.Id != nil {
+			m.showPRReview = false
+			m.prReviewMode = false
+			m.prOverrideMode = false
+			repoID := m.selectedRepo.Id.String()
+
+			// Refresh both PR details and PR list
+			if m.selectedPR != nil && m.selectedPR.PullRequestId != nil {
+				return m, tea.Batch(append(cmds,
+					loadPRDetails(*m.selectedProject.Name, repoID, *m.selectedPR.PullRequestId, m.config),
+					loadRepoPRs(*m.selectedProject.Name, repoID, m.config))...)
+			}
+		}
+		return m, tea.Batch(cmds...)
 	case autoRefreshMsg:
 		if m.autoRefresh && m.showRunDetails && m.selectedProject != nil && m.selectedRun != nil && m.selectedRun.Id != nil {
 			return m, tea.Batch(append(cmds, loadRunTimeline(*m.selectedProject.Name, *m.selectedRun.Id, m.config), tick())...)
@@ -709,7 +873,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 		case "escape", "esc", "backspace":
-			if m.prCreateMode {
+			if m.prOverrideMode {
+				// Exit override mode
+				m.showPRReview = false
+				m.prOverrideMode = false
+				return m, tea.Batch(cmds...)
+			} else if m.prCreateMode {
 				// Exit PR creation mode
 				m.showPRCreate = false
 				m.prCreateMode = false
@@ -749,6 +918,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				if !foundPipeline {
+					m.cursor = 0
+				}
+				m.updateScroll()
+				return m, tea.Batch(cmds...)
+			} else if m.showPRDetails {
+				m.showPRDetails = false
+				m.showPRs = true
+				// Find the cursor position for the selected PR
+				foundPR := false
+				for i, pr := range m.prs {
+					if m.selectedPR != nil && pr.PullRequestId != nil && m.selectedPR.PullRequestId != nil && *pr.PullRequestId == *m.selectedPR.PullRequestId {
+						m.cursor = i
+						foundPR = true
+						break
+					}
+				}
+				if !foundPR {
 					m.cursor = 0
 				}
 				m.updateScroll()
@@ -959,7 +1145,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = 0
 			}
 		case "enter":
-			if m.prCreateMode {
+			if m.prOverrideMode {
+				// Submit override with message
+				if m.prOverrideInput.Value() != "" {
+					return m, tea.Batch(append(cmds, m.overridePR(m.prOverrideInput.Value()))...)
+				}
+				return m, tea.Batch(cmds...)
+			} else if m.prCreateMode {
 				if m.prCreateStep == 4 && m.cursor < len(m.filteredReviewers) {
 					// Add reviewer
 					selectedUser := m.filteredReviewers[m.cursor]
@@ -1007,6 +1199,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							cmds = append(cmds, tick())
 						}
 						return m, tea.Batch(cmds...)
+					}
+					return m, tea.Batch(cmds...)
+				} else if m.showPRs && m.cursor < len(m.prs) {
+					// View PR details
+					m.selectedPR = &m.prs[m.cursor]
+					m.showPRs = false
+					m.showPRDetails = true
+					m.loadingPRDetails = true
+					m.prDetails = nil
+					m.cursor = 0
+
+					if m.selectedProject != nil && m.selectedRepo != nil && m.selectedRepo.Id != nil && m.selectedPR.PullRequestId != nil {
+						repoID := m.selectedRepo.Id.String()
+						return m, tea.Batch(append(cmds,
+							m.prDetailsSpinner.Tick,
+							loadPRDetails(*m.selectedProject.Name, repoID, *m.selectedPR.PullRequestId, m.config),
+							loadPRComments(*m.selectedProject.Name, repoID, *m.selectedPR.PullRequestId, m.config))...)
 					}
 					return m, tea.Batch(cmds...)
 				} else if m.showPipelines && m.cursor < len(m.pipelines) {
@@ -1124,6 +1333,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Batch(cmds...)
 			}
+		case "a":
+			if m.showPRDetails && m.prDetails != nil && m.prDetails.Status != nil &&
+				*m.prDetails.Status == git.PullRequestStatusValues.Active {
+				// Approve PR
+				return m, tea.Batch(append(cmds, m.approvePR(10, "Approved via AZTUI"))...)
+			}
+		case "d":
+			if m.showPRDetails && m.prDetails != nil && m.prDetails.Status != nil &&
+				*m.prDetails.Status == git.PullRequestStatusValues.Active {
+				// Decline PR
+				return m, tea.Batch(append(cmds, m.approvePR(-10, "Declined via AZTUI"))...)
+			}
+		case "o":
+			if m.showPRDetails && m.prDetails != nil && m.prDetails.Status != nil &&
+				*m.prDetails.Status == git.PullRequestStatusValues.Active {
+				// Start override process
+				m.showPRReview = true
+				m.prOverrideMode = true
+				m.prOverrideInput = textinput.New()
+				m.prOverrideInput.Placeholder = "Enter override reason..."
+				m.prOverrideInput.Focus()
+				m.prOverrideInput.Width = 50
+				return m, tea.Batch(cmds...)
+			}
 		}
 	}
 	return m, tea.Batch(cmds...)
@@ -1163,6 +1396,8 @@ func (m *model) updateScroll() {
 		} else if m.cursor >= m.prsScroll+visibleLines {
 			m.prsScroll = m.cursor - visibleLines + 1
 		}
+	} else if m.showPRDetails {
+		// No scrolling needed for PR details view
 	} else if m.showRunDetails {
 		if m.cursor < m.timelineScroll {
 			m.timelineScroll = m.cursor
@@ -1402,6 +1637,17 @@ func (m model) View() string {
 	if m.showPRCreate {
 		rightPanelTitle = "┤ Create Pull Request ├"
 		rightPanelContent = m.renderPRCreate(rightContentHeight - 1)
+	} else if m.showPRDetails {
+		if m.prOverrideMode {
+			rightPanelTitle = "┤ Override PR ├"
+			rightPanelContent = m.renderPROverride(rightContentHeight - 1)
+		} else {
+			rightPanelTitle = "┤ PR Details ├"
+			if m.selectedPR != nil && m.selectedPR.Title != nil {
+				rightPanelTitle = "┤ " + *m.selectedPR.Title + " ├"
+			}
+			rightPanelContent = m.renderPRDetails(rightContentHeight - 1)
+		}
 	} else if m.showRunDetails {
 		rightPanelTitle = "┤ Run Details ├"
 		if m.selectedRun != nil && m.selectedRun.Name != nil {
@@ -1460,7 +1706,7 @@ func (m model) View() string {
 
 	// Update right panel style based on focus
 	rightStyle := rightPanelStyle.Copy()
-	if m.showPipelines || m.showRuns || m.showRunDetails || m.showPRs || m.showPRCreate {
+	if m.showPipelines || m.showRuns || m.showRunDetails || m.showPRs || m.showPRCreate || m.showPRDetails {
 		rightStyle = rightStyle.BorderForeground(lipgloss.Color("12"))
 	} else {
 		rightStyle = rightStyle.BorderForeground(lipgloss.Color("240"))
@@ -2150,7 +2396,172 @@ func (m model) renderPRCreate(visibleLines int) string {
 	return content.String()
 }
 
+func (m model) renderPRDetails(visibleLines int) string {
+	// Show loading animation if PR details are loading
+	if m.loadingPRDetails {
+		return m.renderLoadingAnimation(visibleLines, "Loading PR details", m.prDetailsSpinner)
+	}
+
+	var content strings.Builder
+	linesUsed := 0
+
+	if m.prDetails == nil {
+		content.WriteString("  No PR details available\n")
+		linesUsed++
+	} else {
+		pr := m.prDetails
+
+		// Show PR basic info
+		if pr.Title != nil {
+			content.WriteString("  Title: " + *pr.Title + "\n")
+			linesUsed++
+		}
+
+		if pr.CreatedBy != nil && pr.CreatedBy.DisplayName != nil {
+			content.WriteString("  Author: " + *pr.CreatedBy.DisplayName + "\n")
+			linesUsed++
+		}
+
+		if pr.Status != nil {
+			statusColor := lipgloss.Color("240")
+			statusText := string(*pr.Status)
+			switch *pr.Status {
+			case git.PullRequestStatusValues.Active:
+				statusColor = lipgloss.Color("3") // Yellow
+				statusText = "🟡 Active"
+			case git.PullRequestStatusValues.Completed:
+				statusColor = lipgloss.Color("2") // Green
+				statusText = "✅ Completed"
+			case git.PullRequestStatusValues.Abandoned:
+				statusColor = lipgloss.Color("1") // Red
+				statusText = "❌ Abandoned"
+			}
+			statusStyle := lipgloss.NewStyle().Foreground(statusColor)
+			content.WriteString("  Status: " + statusStyle.Render(statusText) + "\n")
+			linesUsed++
+		}
+
+		// Show branch info
+		if pr.SourceRefName != nil && pr.TargetRefName != nil {
+			sourceBranch := strings.TrimPrefix(*pr.SourceRefName, "refs/heads/")
+			targetBranch := strings.TrimPrefix(*pr.TargetRefName, "refs/heads/")
+			content.WriteString(fmt.Sprintf("  Branches: %s → %s\n", sourceBranch, targetBranch))
+			linesUsed++
+		}
+
+		content.WriteString("\n")
+		linesUsed++
+
+		// Show description if available
+		if pr.Description != nil && *pr.Description != "" {
+			content.WriteString("  Description:\n")
+			content.WriteString("  " + *pr.Description + "\n\n")
+			linesUsed += 3
+		}
+
+		// Show reviewers
+		if pr.Reviewers != nil && len(*pr.Reviewers) > 0 {
+			content.WriteString("  Reviewers:\n")
+			linesUsed++
+			for _, reviewer := range *pr.Reviewers {
+				reviewerName := "Unknown"
+				if reviewer.DisplayName != nil {
+					reviewerName = *reviewer.DisplayName
+				}
+
+				voteText := "⏳ Pending"
+				voteColor := lipgloss.Color("240")
+				if reviewer.Vote != nil {
+					switch *reviewer.Vote {
+					case 10: // Approved
+						voteText = "✅ Approved"
+						voteColor = lipgloss.Color("2")
+					case -10: // Rejected
+						voteText = "❌ Rejected"
+						voteColor = lipgloss.Color("1")
+					case -5: // Waiting for author
+						voteText = "⏸ Waiting"
+						voteColor = lipgloss.Color("3")
+					case 5: // Approved with suggestions
+						voteText = "✅ Approved*"
+						voteColor = lipgloss.Color("2")
+					}
+				}
+
+				voteStyle := lipgloss.NewStyle().Foreground(voteColor)
+				content.WriteString(fmt.Sprintf("    %s: %s\n", reviewerName, voteStyle.Render(voteText)))
+				linesUsed++
+			}
+			content.WriteString("\n")
+			linesUsed++
+		}
+
+		// Show recent action message if available
+		if m.prActionMessage != "" && time.Since(m.prActionTime) < 10*time.Second {
+			messageColor := lipgloss.Color("2") // Green for success
+			if strings.Contains(m.prActionMessage, "Failed") {
+				messageColor = lipgloss.Color("1") // Red for error
+			}
+			messageStyle := lipgloss.NewStyle().Foreground(messageColor)
+			content.WriteString("  " + messageStyle.Render(m.prActionMessage) + "\n\n")
+			linesUsed += 2
+		}
+
+		// Show action buttons if PR is active
+		if pr.Status != nil && *pr.Status == git.PullRequestStatusValues.Active {
+			content.WriteString("  Actions:\n")
+			content.WriteString("  a: Approve   •   d: Decline   •   o: Override & Complete\n")
+			linesUsed += 2
+		}
+
+		content.WriteString("\n  Press Esc to go back\n")
+		linesUsed += 2
+	}
+
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
+	}
+
+	return content.String()
+}
+
+func (m model) renderPROverride(visibleLines int) string {
+	var content strings.Builder
+	linesUsed := 0
+
+	content.WriteString("  Override PR Completion\n\n")
+	linesUsed += 2
+
+	content.WriteString("  This action will complete the PR even if all\n")
+	content.WriteString("  required reviews are not met.\n\n")
+	linesUsed += 3
+
+	content.WriteString("  Override Reason:\n")
+	content.WriteString("  " + m.prOverrideInput.View() + "\n\n")
+	linesUsed += 3
+
+	content.WriteString("  ⚠️  WARNING: This bypasses branch policies!\n\n")
+	linesUsed += 2
+
+	content.WriteString("  Press Enter to confirm override\n")
+	content.WriteString("  Press Esc to cancel\n")
+	linesUsed += 2
+
+	// Fill remaining space with empty lines to maintain fixed height
+	for linesUsed < visibleLines {
+		content.WriteString("\n")
+		linesUsed++
+	}
+
+	return content.String()
+}
+
 func (m model) getInstructions() string {
+	if m.prOverrideMode {
+		return "Type override reason   •   Enter Confirm   •   Esc Cancel   •   q Quit"
+	}
 	if m.prCreateMode {
 		return "Tab Navigate   •   Enter Submit   •   Esc Cancel   •   q Quit"
 	}
@@ -2167,8 +2578,11 @@ func (m model) getInstructions() string {
 	if m.showRuns {
 		return "↑/↓ Navigate   •   Enter View Run   •   Esc/← Back   •   q Quit"
 	}
+	if m.showPRDetails {
+		return "a Approve   •   d Decline   •   o Override   •   Esc/← Back   •   q Quit"
+	}
 	if m.showPRs {
-		return "↑/↓ Navigate   •   n New PR   •   Esc/← Back   •   q Quit"
+		return "↑/↓ Navigate   •   Enter View PR   •   n New PR   •   Esc/← Back   •   q Quit"
 	}
 	if m.showPipelines {
 		return "↑/↓ Navigate   •   Enter View Runs   •   Esc/← Back   •   q Quit"
@@ -2291,6 +2705,22 @@ func main() {
 		prCreateStep:      0,
 		reviewerSearch:    "",
 		filteredReviewers: []graph.GraphUser{},
+		// PR Details fields
+		showPRDetails:     false,
+		prDetails:         nil,
+		prComments:        []git.GitPullRequestCommentThread{},
+		loadingPRDetails:  false,
+		loadingPRComments: false,
+		prDetailsSpinner:  s1, // Reuse existing spinner
+		// PR Review fields
+		showPRReview:    false,
+		prReviewMode:    false,
+		prReviewAction:  "",
+		prOverrideInput: textinput.New(),
+		prCommentInput:  textinput.New(),
+		prOverrideMode:  false,
+		prActionMessage: "",
+		prActionTime:    time.Time{},
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {

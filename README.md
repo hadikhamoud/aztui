@@ -4,9 +4,8 @@ Main features to tackle
 
 - Pull request creation
 - Pull request resolution
-- Build pipeline status updates
+- Build pipeline status updates (Done)
 - Remote history commit checking
-- Pulling new repos into local
-- Cutting new tags (unsupported entirely)
+- Cutting new tags (only tags no messages so far)
 - view assigned tickets
-- add service hooks?
+- Pulling new repos into local
