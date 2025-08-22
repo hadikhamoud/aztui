@@ -1728,11 +1728,11 @@ func (m model) View() string {
 			Render("🔍 Search: " + searchQuery)
 	} else {
 		// Empty space to maintain layout consistency - match search bar height
-		// The search bar with border takes 3 lines total (1 top border, 1 content, 1 bottom border)
+		// Create a properly sized empty search bar with padding to match the active search bar
+		emptyContent := "\n\n" // Two newlines to match the content height of active search bar
 		searchBar = searchStyle.
 			Width(m.width - 4).
-			Height(3).
-			Render("")
+			Render(emptyContent)
 	}
 
 	// Create left column by stacking projects and repos vertically
