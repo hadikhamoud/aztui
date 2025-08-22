@@ -32,7 +32,6 @@ var baseBoxStyle = lipgloss.NewStyle().
 
 var rightPanelStyle = lipgloss.NewStyle().
 	BorderStyle(lipgloss.RoundedBorder()).
-	BorderForeground(lipgloss.Color("240")).
 	Padding(1)
 
 var highlightStyle = lipgloss.NewStyle().
@@ -1552,7 +1551,7 @@ func (m model) View() string {
 	leftWidth := m.width / 2
 	rightWidth := m.width - leftWidth
 	leftBoxHeight := totalAvailableHeight / 2 // Each left box gets exactly half
-	rightBoxHeight := totalAvailableHeight    // Right panel takes full height
+	rightBoxHeight := totalAvailableHeight    // Right panel height matches total available height
 
 	// Ensure minimum dimensions
 	if leftWidth < 20 {
@@ -1574,7 +1573,7 @@ func (m model) View() string {
 	leftContentWidth := leftWidth - 4
 	rightContentWidth := rightWidth - 4
 	leftContentHeight := leftBoxHeight - 4
-	rightContentHeight := rightBoxHeight - 4 // Right panel content height
+	rightContentHeight := rightBoxHeight - 4 // Right panel content height matches total available height
 
 	// Ensure content area is not negative and has reasonable minimums
 	if leftContentWidth < 5 {
@@ -1728,10 +1727,11 @@ func (m model) View() string {
 			Width(m.width - 4).
 			Render("🔍 Search: " + searchQuery)
 	} else {
-		// Empty space to maintain layout consistency
-		searchBar = lipgloss.NewStyle().
+		// Empty space to maintain layout consistency - match search bar height
+		// The search bar with border takes 3 lines total (1 top border, 1 content, 1 bottom border)
+		searchBar = searchStyle.
 			Width(m.width - 4).
-			Height(1).
+			Height(3).
 			Render("")
 	}
 
