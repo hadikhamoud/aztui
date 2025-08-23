@@ -298,3 +298,7 @@ func GetPRComments(ctx context.Context, connection *azuredevops.Connection, Proj
 func stringPtr(s string) *string {
 	return &s
 }
+
+func boolPtr(b bool) *bool {
+	return &b
+}

@@ -395,13 +395,45 @@ func (m model) approvePR(vote int, comment string) tea.Cmd {
 
 		var actionText string
 		if vote == 10 {
-			actionText = "PR approved successfully"
+			actionText = "Your approval vote submitted successfully"
 		} else if vote == -10 {
-			actionText = "PR declined successfully"
+			actionText = "Your rejection vote submitted successfully"
 		} else {
-			actionText = "PR vote submitted successfully"
+			actionText = "Your vote submitted successfully"
 		}
 		return prActionCompleteMsg{action: "approve", success: true, message: actionText}
+	}
+}
+
+func (m model) completePR() tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedProject == nil || m.selectedRepo == nil || m.selectedPR == nil ||
+			m.selectedRepo.Id == nil || m.selectedPR.PullRequestId == nil {
+			return prActionCompleteMsg{action: "complete", success: false, message: "Failed to complete PR: missing project, repo, or PR details"}
+		}
+
+		connection := azuredevops.NewPatConnection(m.config.AzureOrgURL, m.config.AzurePAT)
+		ctx := context.Background()
+
+		repoID := m.selectedRepo.Id.String()
+		prID := *m.selectedPR.PullRequestId
+
+		// Set default completion options
+		mergeMessage := "Merge pull request #" + fmt.Sprintf("%d", prID)
+		deleteSourceBranch := true
+		completionOptions := &git.GitPullRequestCompletionOptions{
+			MergeCommitMessage: &mergeMessage,
+			DeleteSourceBranch: &deleteSourceBranch,
+			MergeStrategy:      &git.GitPullRequestMergeStrategyValues.Squash, // Default to squash merge
+		}
+
+		_, err := prs.CompletePR(ctx, connection, *m.selectedProject.Name, repoID, prID, completionOptions)
+		if err != nil {
+			log.Printf("Error completing PR: %v", err)
+			return prActionCompleteMsg{action: "complete", success: false, message: fmt.Sprintf("Failed to complete PR: %v", err)}
+		}
+
+		return prActionCompleteMsg{action: "complete", success: true, message: "PR completed successfully"}
 	}
 }
 
@@ -1343,6 +1375,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				*m.prDetails.Status == git.PullRequestStatusValues.Active {
 				// Decline PR
 				return m, tea.Batch(append(cmds, m.approvePR(-10, "Declined via AZTUI"))...)
+			}
+		case "c":
+			if m.showPRDetails && m.prDetails != nil && m.prDetails.Status != nil &&
+				*m.prDetails.Status == git.PullRequestStatusValues.Active {
+				// Complete PR
+				return m, tea.Batch(append(cmds, m.completePR())...)
 			}
 		case "o":
 			if m.showPRDetails && m.prDetails != nil && m.prDetails.Status != nil &&
@@ -2579,7 +2617,7 @@ func (m model) getInstructions() string {
 		return "↑/↓ Navigate   •   Enter View Run   •   Esc/← Back   •   q Quit"
 	}
 	if m.showPRDetails {
-		return "a Approve   •   d Decline   •   o Override   •   Esc/← Back   •   q Quit"
+		return "a Approve   •   d Decline   •   c Complete   •   o Override   •   Esc/← Back   •   q Quit"
 	}
 	if m.showPRs {
 		return "↑/↓ Navigate   •   Enter View PR   •   n New PR   •   Esc/← Back   •   q Quit"
