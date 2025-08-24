@@ -9,3 +9,6 @@ Main features to tackle
 - Cutting new tags (only tags no messages so far)
 - view assigned tickets
 - Pulling new repos into local
+
+Exploring opentui maybe?
+
