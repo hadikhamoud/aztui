@@ -1,7 +1,7 @@
 {
   "dependencies": {
-    "@opentui/core": "^0.1.8",
-    "@opentui/react": "^0.1.8",
+    "@opentui/core": "^0.1.9",
+    "@opentui/react": "^0.1.9",
     "react": "^19.1.1"
   }
 }

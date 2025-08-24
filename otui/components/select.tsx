@@ -5,16 +5,14 @@ export function Select({ options, focused }: { options: SelectOption[], focused?
   const [selectedIndex, setSelectedIndex] = useState(0)
 
   return (
-    <box style={{ height: 24 }}>
-      <select
-        style={{ height: 22 }}
-        options={options}
-        focused={focused}
-        onChange={(index, option) => {
-          setSelectedIndex(index)
-          console.log("Selected:", option)
-        }}
-      />
-    </box>
+    <select
+      style={{ height: 22, focusedBackgroundColor: "transparent", selectedBackgroundColor: "#007595" }}
+      options={options}
+      focused={focused}
+      onChange={(index, option) => {
+        setSelectedIndex(index)
+        console.log("Selected:", option)
+      }}
+    />
   )
 }
