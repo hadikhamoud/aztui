@@ -3,7 +3,7 @@ import { useKeyboard } from "@opentui/react"
 import { Select } from "./components/select"
 import { Logo } from "./components/logo"
 import type { SelectOption } from "@opentui/core"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useTerminalDimensions } from "@opentui/react"
 import { getProjects, getRepos } from "./api"
 
@@ -16,16 +16,18 @@ function App() {
   const [repoOptions, setRepoOptions] = useState<SelectOption[]>([])
   const { width, height } = useTerminalDimensions()
 
-  // Load projects after render
-  Promise.resolve().then(async () => {
-    const projects = await getProjects()
-    const options = projects?.map(p => ({
-      name: `${p.name}`,
-      value: `${p.id}`,
-      description: `${p.id}`,
-    })) || []
-    setProjectOptions(options)
-  })
+  useEffect(() => {
+    const loadProjects = async () => {
+      const projects = await getProjects()
+      const options = projects?.map(p => ({
+        name: `${p.name}`,
+        value: `${p.id}`,
+        description: `${p.id}`,
+      })) || []
+      setProjectOptions(options)
+    }
+    loadProjects()
+  }, [])
 
   useKeyboard((key) => {
     if (key.name === "tab") {
