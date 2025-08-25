@@ -5,42 +5,53 @@ import { Logo } from "./components/logo"
 import type { SelectOption } from "@opentui/core"
 import { useState } from "react"
 import { useTerminalDimensions } from "@opentui/react"
+import { getProjects, getRepos } from "./api"
+
+const projects = await getProjects()
 
 function App() {
 
   const [focused, setFocused] = useState(0)
-  const [searchBarAvailable, setSearchBarAvailable] = useState(false)
+  const [selectedProjectIndex, setSelectedProjectIndex] = useState(0)
+  const [repoOptions, setRepoOptions] = useState<SelectOption[]>([])
   const { width, height } = useTerminalDimensions()
 
   useKeyboard((key) => {
     if (key.name === "tab") {
       setFocused((focused + 1) % 2)
     }
-    if (key.name === "/") {
-      setSearchBarAvailable(!searchBarAvailable)
+    if (key.name === "return") {
+      if (focused === 0 && projectOptions[selectedProjectIndex]) {
+        handleProjectSelect(projectOptions[selectedProjectIndex].value)
+      }
+      if (focused === 1) {
+        console.log("repo selected")
+      }
     }
   })
 
-  const projectOptions: SelectOption[] = Array.from({ length: 200 }, (_, i) => {
-    const index = i + 1
-    return {
-      name: `Project${index}`,
-      value: `Project${index}`,
-      description: `Project${index} description`,
-    }
-  })
-  const repoOptions: SelectOption[] = [
+  const handleProjectSelect = async (projectId: string) => {
+    const repos = await getRepos(projectId)
+    const options = repos?.map(r => ({
+      name: `${r.name}`,
+      value: `${r.id}`,
+      description: `${r.id}`,
+    })) || []
+    setRepoOptions(options)
+  }
 
-    { name: "Repo1", value: "Repo1", description: "Repo1 description" },
-    { name: "Repo2", value: "Repo2", description: "Repo2 description" },
-  ];
+  const projectOptions: SelectOption[] = projects?.map(p => ({
+    name: `${p.name}`,
+    value: `${p.id}`,
+    description: `${p.id}`,
+  })) || []
 
   return (
-    <group width={width} height={height - 5} flexDirection="row" >
+    <group width={width} height={height} flexDirection="row" >
 
       <group flexDirection="column" width={width / 2} height={height}>
         <box title="projects" padding={0.5} borderStyle="rounded" height={height / 2} borderColor={focused === 0 ? "#007595" : "white"}>
-          <Select options={projectOptions} focused={focused === 0} />
+          <Select options={projectOptions} focused={focused === 0} onSelect={(value) => setSelectedProjectIndex(projectOptions.findIndex(p => p.value === value))} />
         </box>
         <box title="Repos" padding={0.5} borderStyle="rounded" height={height / 2} borderColor={focused === 1 ? "#007595" : "white"}>
           <Select options={repoOptions} focused={focused === 1} />
@@ -50,8 +61,6 @@ function App() {
 
       <box title="workspace" padding={2} borderStyle="rounded" width={width / 2} height={height}>
         <Logo />
-        <input focused={searchBarAvailable} placeholder="Search..." />
-
       </box>
     </group>
   )
