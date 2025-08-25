@@ -1,7 +1,7 @@
 import type { SelectOption } from "@opentui/core"
 import { useState } from "react"
 
-export function Select({ options, focused }: { options: SelectOption[], focused?: boolean }) {
+export function Select({ options, focused, onSelect }: { options: SelectOption[], focused?: boolean, onSelect?: (value: string) => void }) {
   const [selectedIndex, setSelectedIndex] = useState(0)
 
   return (
@@ -11,7 +11,9 @@ export function Select({ options, focused }: { options: SelectOption[], focused?
       focused={focused}
       onChange={(index, option) => {
         setSelectedIndex(index)
-        console.log("Selected:", option)
+        if (onSelect && option) {
+          onSelect(option.value)
+        }
       }}
     />
   )
