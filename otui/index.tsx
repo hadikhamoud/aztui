@@ -1,7 +1,7 @@
 import { render } from "@opentui/react"
 import { useKeyboard } from "@opentui/react"
 import { Select } from "./components/select"
-import { Logo } from "./components/logo"
+import { Logo } from "./components/logo_2"
 import type { SelectOption } from "@opentui/core"
 import { useState, useEffect } from "react"
 import { useTerminalDimensions } from "@opentui/react"
@@ -38,6 +38,7 @@ function App() {
         const selectedProject = projectOptions[selectedProjectIndex]
         setSelectedProjectName(selectedProject.name)
         handleProjectSelect(selectedProject.value)
+        setFocused(1)
       }
       if (focused === 1) {
         console.log("repo selected")
