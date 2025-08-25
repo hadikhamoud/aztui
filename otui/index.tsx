@@ -7,26 +7,36 @@ import { useState } from "react"
 import { useTerminalDimensions } from "@opentui/react"
 import { getProjects, getRepos } from "./api"
 
-const projects = await getProjects()
-
 function App() {
 
   const [focused, setFocused] = useState(0)
   const [selectedProjectIndex, setSelectedProjectIndex] = useState(0)
   const [selectedProjectName, setSelectedProjectName] = useState<string>("")
+  const [projectOptions, setProjectOptions] = useState<SelectOption[]>([])
   const [repoOptions, setRepoOptions] = useState<SelectOption[]>([])
   const { width, height } = useTerminalDimensions()
+
+  // Load projects after render
+  Promise.resolve().then(async () => {
+    const projects = await getProjects()
+    const options = projects?.map(p => ({
+      name: `${p.name}`,
+      value: `${p.id}`,
+      description: `${p.id}`,
+    })) || []
+    setProjectOptions(options)
+  })
 
   useKeyboard((key) => {
     if (key.name === "tab") {
       setFocused((focused + 1) % 2)
     }
-     if (key.name === "return") {
-       if (focused === 0 && projectOptions[selectedProjectIndex]) {
-         const selectedProject = projectOptions[selectedProjectIndex]
-         setSelectedProjectName(selectedProject.name)
-         handleProjectSelect(selectedProject.value)
-       }
+    if (key.name === "return") {
+      if (focused === 0 && projectOptions[selectedProjectIndex]) {
+        const selectedProject = projectOptions[selectedProjectIndex]
+        setSelectedProjectName(selectedProject.name)
+        handleProjectSelect(selectedProject.value)
+      }
       if (focused === 1) {
         console.log("repo selected")
       }
@@ -43,11 +53,7 @@ function App() {
     setRepoOptions(options)
   }
 
-  const projectOptions: SelectOption[] = projects?.map(p => ({
-    name: `${p.name}`,
-    value: `${p.id}`,
-    description: `${p.id}`,
-  })) || []
+
 
   return (
     <group width={width} height={height} flexDirection="row" >
