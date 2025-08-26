@@ -5,6 +5,7 @@ import { useAppStore } from "./store/app-store"
 import { ProjectBox } from "./components/project-box"
 import { RepoBox } from "./components/repo-box"
 import { WorkspaceBox } from "./components/workspace-box"
+import { Controls } from "./components/controls"
 
 function App() {
   const { width, height } = useTerminalDimensions()
@@ -12,9 +13,15 @@ function App() {
     focusedBox,
     cycleFocus,
     selectedProject,
+    selectedRepo,
     loadRepos,
-    setFocusedBox
+    setFocusedBox,
+    enterWorkspace,
+    exitWorkspace,
+    isInWorkspace
   } = useAppStore()
+
+
 
   useKeyboard((key) => {
     if (key.name === "tab") {
@@ -25,19 +32,30 @@ function App() {
         loadRepos(selectedProject.value)
         setFocusedBox("repos")
       }
-      if (focusedBox === "repos") {
-        console.log("repo selected")
+      if (focusedBox === "repos" && selectedRepo) {
+        enterWorkspace()
+      }
+      if (focusedBox === "workspace" && isInWorkspace) {
+        console.log("workspace option selected")
+      }
+    }
+    if (key.name === "escape") {
+      if (isInWorkspace) {
+        exitWorkspace()
       }
     }
   })
 
   return (
-    <group width={width} height={height} flexDirection="row">
-      <group flexDirection="column" flexGrow={1}>
-        <ProjectBox />
-        <RepoBox />
+    <group width={width} height={height} flexDirection="column">
+      <group width={width} height={height - 1} flexDirection="row">
+        <group flexDirection="column" width={width / 2} height={height - 1}>
+          <ProjectBox />
+          <RepoBox />
+        </group>
+        <WorkspaceBox />
       </group>
-      <WorkspaceBox />
+      <Controls />
     </group>
   )
 }

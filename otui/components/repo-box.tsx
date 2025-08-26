@@ -1,7 +1,9 @@
 import { Select } from "./select"
 import { useAppStore } from "../store/app-store"
+import { useTerminalDimensions } from "@opentui/react"
 
 export function RepoBox() {
+  const { height } = useTerminalDimensions()
   const {
     repos,
     selectedProject,
@@ -18,8 +20,8 @@ export function RepoBox() {
     }
   }
 
-  const title = selectedProject
-    ? `repos - ${selectedProject.name}`
+  const title = selectedProject 
+    ? `repos - ${selectedProject.name}` 
     : "repos"
 
   return (
@@ -27,12 +29,12 @@ export function RepoBox() {
       title={title}
       padding={0.5} 
       borderStyle="rounded" 
-      flexGrow={1}
+      height={Math.floor((height - 1) / 2)}
       borderColor={isFocused ? "#007595" : "white"}
     >
-      <Select
-        options={repos}
-        focused={isFocused}
+      <Select 
+        options={repos} 
+        focused={isFocused} 
         onSelect={handleSelect}
       />
     </box>

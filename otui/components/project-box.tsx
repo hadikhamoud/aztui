@@ -1,8 +1,10 @@
 import { useEffect } from "react"
 import { Select } from "./select"
 import { useAppStore } from "../store/app-store"
+import { useTerminalDimensions } from "@opentui/react"
 
 export function ProjectBox() {
+  const { height } = useTerminalDimensions()
   const {
     projects,
     focusedBox,
@@ -28,12 +30,12 @@ export function ProjectBox() {
       title="projects" 
       padding={0.5} 
       borderStyle="rounded" 
-      flexGrow={1}
+      height={Math.floor((height - 1) / 2)}
       borderColor={isFocused ? "#007595" : "white"}
     >
-      <Select
-        options={projects}
-        focused={isFocused}
+      <Select 
+        options={projects} 
+        focused={isFocused} 
         onSelect={handleSelect}
       />
     </box>

@@ -22,6 +22,14 @@ interface AppStore {
   setRepos: (repos: SelectOption[]) => void
   selectRepo: (repo: SelectOption, index: number) => void
   loadRepos: (projectId: string) => Promise<void>
+
+  // Workspace functionality
+  workspaceOptions: SelectOption[]
+  selectedWorkspaceOption: SelectOption | null
+  isInWorkspace: boolean
+  selectWorkspaceOption: (option: SelectOption) => void
+  enterWorkspace: () => void
+  exitWorkspace: () => void
 }
 
 const focusOrder: FocusedBox[] = ['projects', 'repos']
@@ -82,5 +90,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (error) {
       console.error('Failed to load repos:', error)
     }
+  },
+
+  // Workspace functionality
+  workspaceOptions: [
+    { name: "build pipelines", value: "pipelines", description: "" },
+    { name: "pull requests", value: "prs", description: "" }
+  ],
+  selectedWorkspaceOption: null,
+  isInWorkspace: false,
+  selectWorkspaceOption: (option: SelectOption) => {
+    set({ selectedWorkspaceOption: option })
+  },
+  enterWorkspace: () => {
+    set({ isInWorkspace: true, focusedBox: 'workspace' })
+  },
+  exitWorkspace: () => {
+    set({ isInWorkspace: false, focusedBox: 'repos', selectedWorkspaceOption: null })
   },
 }))
