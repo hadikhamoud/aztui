@@ -23,7 +23,6 @@ interface AppStore {
   selectRepo: (repo: SelectOption, index: number) => void
   loadRepos: (projectId: string) => Promise<void>
 
-  // Workspace functionality
   workspaceOptions: SelectOption[]
   selectedWorkspaceOption: SelectOption | null
   isInWorkspace: boolean
@@ -32,7 +31,7 @@ interface AppStore {
   exitWorkspace: () => void
 }
 
-const focusOrder: FocusedBox[] = ['projects', 'repos']
+const focusOrder: FocusedBox[] = ['projects', 'repos', 'workspace']
 
 export const useAppStore = create<AppStore>((set, get) => ({
   focusedBox: 'projects',
