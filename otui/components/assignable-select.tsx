@@ -1,8 +1,12 @@
-import { SelectRenderable } from "@opentui/core"
+import { SelectRenderable, type SelectRenderableOptions } from "@opentui/core"
 import { extend } from "@opentui/react"
 
+interface ExtendedSelectRenderableOptions extends SelectRenderableOptions {
+  value?: any
+}
+
 class ExtendedSelectRenderable extends SelectRenderable {
-  constructor(id: string, options: any) {
+  constructor(id: string, options: ExtendedSelectRenderableOptions) {
     super(id, options)
 
     if (options.value !== undefined) {
