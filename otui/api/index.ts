@@ -8,23 +8,28 @@ let orgUrl = Bun.env.AZURE_ORG_URL || "";
 let token: string = Bun.env.AZURE_PAT || "";
 
 let connection: azdev.WebApi | null = null;
-let core: coreA.ICoreApi | null = null;
-let git: gitA.GitApi | null = null;
+let coreApi: coreA.ICoreApi | null = null;
+let gitApi: gitA.GitApi | null = null;
+let buildApi: buildA.BuildApi | null = null;
+let pipelineApi: pipelineA.PipelinesApi | null = null;
+
 
 async function initializeConnection() {
   if (connection) return;
 
   let authHandler = azdev.getPersonalAccessTokenHandler(token);
   connection = new azdev.WebApi(orgUrl, authHandler);
-  core = await connection.getCoreApi();
-  git = await connection.getGitApi();
+  coreApi = await connection.getCoreApi();
+  gitApi = await connection.getGitApi();
+  buildApi = await connection.getBuildApi();
+  pipelineApi = await connection.getPipelinesApi();
 }
 
 export async function getProjects() {
   await initializeConnection();
-  if (!core) throw new Error("Failed to initialize core API");
+  if (!coreApi) throw new Error("Failed to initialize core API");
 
-  const pagedProjects = await core.getProjects();
+  const pagedProjects = await coreApi.getProjects();
 
   pagedProjects?.forEach(project => {
     console.log(`Project: ${project.name} (${project.id})`);
@@ -36,9 +41,9 @@ export async function getProjects() {
 
 export async function getRepos(projectId: string) {
   await initializeConnection();
-  if (!git) throw new Error("Failed to initialize git API");
+  if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const pagedRepos = await git.getRepositories(projectId);
+  const pagedRepos = await gitApi.getRepositories(projectId);
   pagedRepos?.forEach(repo => {
     console.log(`Repo: ${repo.name} (${repo.id})`);
   });
@@ -48,11 +53,10 @@ export async function getRepos(projectId: string) {
 
 export async function getPipelines(projectId: string) {
   await initializeConnection();
-  if (!connection) throw new Error("Failed to initialize connection");
-  
-  const pipelinesApi = await connection.getPipelinesApi();
-  const pipelines = await pipelinesApi.listPipelines(projectId);
-  
+
+  if (!pipelineApi) throw new Error("Failed to initialize git API");
+  const pipelines = await pipelineApi.listPipelines(projectId);
+
   pipelines?.forEach(pipeline => {
     console.log(`Pipeline: ${pipeline.name} (${pipeline.id})`);
   });
@@ -61,11 +65,10 @@ export async function getPipelines(projectId: string) {
 
 export async function getPipelineRuns(projectId: string, pipelineId: number) {
   await initializeConnection();
-  if (!connection) throw new Error("Failed to initialize connection");
-  
-  const pipelinesApi = await connection.getPipelinesApi();
-  const runs = await pipelinesApi.listRuns(projectId, pipelineId);
-  
+
+  if (!pipelineApi) throw new Error("Failed to initialize git API");
+  const runs = await pipelineApi.listRuns(projectId, pipelineId);
+
   runs?.forEach(run => {
     console.log(`Run: ${run.name} (${run.id}) - ${run.state}`);
   });
@@ -74,11 +77,11 @@ export async function getPipelineRuns(projectId: string, pipelineId: number) {
 
 export async function getBuildTimeline(projectId: string, buildId: number) {
   await initializeConnection();
-  if (!connection) throw new Error("Failed to initialize connection");
-  
-  const buildApi = await connection.getBuildApi();
+  if (!buildApi) throw new Error("Failed to initialize git API");
+
   const timeline = await buildApi.getBuildTimeline(projectId, buildId);
-  
+
   return timeline;
 }
+
 
