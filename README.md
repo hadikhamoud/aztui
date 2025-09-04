@@ -10,5 +10,7 @@ Main features to tackle
 - view assigned tickets
 - Pulling new repos into local
 
-Exploring opentui maybe?
+Exploring opentui officially
+
+- Currently working on the rewrite
 
