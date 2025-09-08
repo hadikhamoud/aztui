@@ -46,6 +46,8 @@ export async function getRepos(projectId: string) {
   const pagedRepos = await gitApi.getRepositories(projectId);
   pagedRepos?.forEach(repo => {
     console.log(`Repo: ${repo.name} (${repo.id})`);
+    console.log(`Clone URL: ${repo.cloneUrl}`);
+    console.log(`SSH URL: ${repo.sshUrl}`);
   });
   return pagedRepos;
 }
@@ -82,6 +84,55 @@ export async function getBuildTimeline(projectId: string, buildId: number) {
   const timeline = await buildApi.getBuildTimeline(projectId, buildId);
 
   return timeline;
+}
+
+export async function cloneRepo(repoUrl: string, targetPath: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const { spawn } = require('child_process');
+    
+    return new Promise((resolve) => {
+      const gitClone = spawn('git', ['clone', repoUrl, targetPath], {
+        stdio: 'pipe'
+      });
+
+      let output = '';
+      let errorOutput = '';
+
+      gitClone.stdout.on('data', (data: Buffer) => {
+        output += data.toString();
+      });
+
+      gitClone.stderr.on('data', (data: Buffer) => {
+        errorOutput += data.toString();
+      });
+
+      gitClone.on('close', (code: number) => {
+        if (code === 0) {
+          resolve({ 
+            success: true, 
+            message: `Repository successfully cloned to ${targetPath}` 
+          });
+        } else {
+          resolve({ 
+            success: false, 
+            message: `Clone failed: ${errorOutput || 'Unknown error'}` 
+          });
+        }
+      });
+
+      gitClone.on('error', (err: Error) => {
+        resolve({ 
+          success: false, 
+          message: `Clone failed: ${err.message}` 
+        });
+      });
+    });
+  } catch (error) {
+    return { 
+      success: false, 
+      message: `Clone failed: ${error instanceof Error ? error.message : 'Unknown error'}` 
+    };
+  }
 }
 
 
