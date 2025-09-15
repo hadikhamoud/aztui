@@ -7,16 +7,25 @@ export function RepoBox() {
   const {
     repos,
     selectedProject,
+    selectedRepo,
     focusedBox,
-    selectRepo
+    selectRepo,
+    getFilteredOptions,
+    clearSearch,
+    isSearchActive,
+    isSelectMode,
+    searchHighlightedIndex
   } = useAppStore()
 
   const isFocused = focusedBox === 'repos'
+  const displayOptions = isFocused ? getFilteredOptions('repos') : repos
 
   const handleSelect = (value: string) => {
-    const index = repos.findIndex(r => r.value === value)
-    if (index !== -1) {
-      selectRepo(repos[index], index)
+    const repo = repos.find(r => r.value === value)
+    if (repo) {
+      const index = repos.findIndex(r => r.value === value)
+      selectRepo(repo, index)
+      clearSearch()
     }
   }
 
@@ -33,8 +42,12 @@ export function RepoBox() {
       borderColor={isFocused ? "#007595" : "white"}
     >
       <Select 
-        options={repos} 
+        options={displayOptions} 
         focused={isFocused} 
+        value={selectedRepo?.value}
+        highlightedIndex={isSearchActive && isFocused ? searchHighlightedIndex : undefined}
+        isSearchActive={isSearchActive}
+        isSelectMode={isSelectMode}
         onSelect={handleSelect}
       />
     </box>

@@ -9,19 +9,28 @@ export function ProjectBox() {
     projects,
     focusedBox,
     loadProjects,
-    selectProject
+    selectProject,
+    getFilteredOptions,
+    selectedProject,
+    clearSearch,
+    isSearchActive,
+    isSelectMode,
+    searchHighlightedIndex
   } = useAppStore()
 
   const isFocused = focusedBox === 'projects'
+  const displayOptions = isFocused ? getFilteredOptions('projects') : projects
 
   useEffect(() => {
     loadProjects()
   }, [loadProjects])
 
   const handleSelect = (value: string) => {
-    const index = projects.findIndex(p => p.value === value)
-    if (index !== -1) {
-      selectProject(projects[index], index)
+    const project = projects.find(p => p.value === value)
+    if (project) {
+      const index = projects.findIndex(p => p.value === value)
+      selectProject(project, index)
+      clearSearch()
     }
   }
 
@@ -34,8 +43,12 @@ export function ProjectBox() {
       borderColor={isFocused ? "#007595" : "white"}
     >
       <Select 
-        options={projects} 
+        options={displayOptions} 
         focused={isFocused} 
+        value={selectedProject?.value}
+        highlightedIndex={isSearchActive && isFocused ? searchHighlightedIndex : undefined}
+        isSearchActive={isSearchActive}
+        isSelectMode={isSelectMode}
         onSelect={handleSelect}
       />
     </box>
