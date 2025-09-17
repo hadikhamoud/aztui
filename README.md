@@ -13,4 +13,5 @@ Main features to tackle
 Exploring opentui officially
 
 - Currently working on the rewrite
+- want to implement scrollables instead of only selects
 
