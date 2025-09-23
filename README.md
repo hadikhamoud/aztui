@@ -3,5 +3,4 @@ Attempt at implementing a terminal user interface for Azure Devops VC, build pip
 Exploring opentui officially
 
 - Currently working on the rewrite
-- want to implement scrollables instead of only selects
 
