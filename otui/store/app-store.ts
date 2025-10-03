@@ -352,14 +352,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       cloneFocusedField: 'method'
     })
   },
-  exitCloneView: () => {
-    set({ 
-      isInCloneView: false, 
-      cloneLocation: '', 
-      cloneStatus: null,
-      cloneFocusedField: 'method'
-    })
-  },
   setCloneLocation: (location: string) => {
     set({ cloneLocation: location })
   },

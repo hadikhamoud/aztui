@@ -39,7 +39,7 @@ export function ProjectBox() {
       title="projects" 
       padding={0.5} 
       borderStyle="rounded" 
-      height={Math.floor((height - 1) / 2)}
+      height={Math.floor((height - 2) / 2)}
       borderColor={isFocused ? "#007595" : "white"}
     >
       <Select 

@@ -6,6 +6,7 @@ import { ProjectBox } from "./components/project-box"
 import { RepoBox } from "./components/repo-box"
 import { WorkspaceBox } from "./components/workspace-box"
 import { Controls } from "./components/controls"
+import { SearchBar } from "./components/search-bar"
 
 function App() {
   const { width, height } = useTerminalDimensions()
@@ -18,12 +19,47 @@ function App() {
     setFocusedBox,
     enterWorkspace,
     exitWorkspace,
-    isInWorkspace
+    isInWorkspace,
+    isSearchActive,
+    setSearchActive,
+    searchQuery,
+    setSearchQuery,
+    clearSearch
   } = useAppStore()
 
 
 
   useKeyboard((key) => {
+    if (isSearchActive) {
+      if (key.name === "escape") {
+        clearSearch()
+        return
+      }
+      
+      if (key.name === "return") {
+        setSearchActive(false)
+        return
+      }
+      
+      if (key.name === "backspace") {
+        setSearchQuery(searchQuery.slice(0, -1))
+        return
+      }
+      
+      if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
+        setSearchQuery(searchQuery + key.sequence)
+        return
+      }
+      
+      return
+    }
+    
+    if (key.sequence === "/" && !isSearchActive) {
+      setSearchActive(true)
+      setSearchQuery("")
+      return
+    }
+    
     if (key.name === "tab") {
       cycleFocus()
     }
@@ -48,13 +84,14 @@ function App() {
 
   return (
     <group width={width} height={height} flexDirection="column">
-      <group width={width} height={height - 1} flexDirection="row">
-        <group flexDirection="column" width={width / 2} height={height - 1}>
+      <group width={width} height={height - 2} flexDirection="row">
+        <group flexDirection="column" width={width / 2} height={height - 2}>
           <ProjectBox />
           <RepoBox />
         </group>
         <WorkspaceBox />
       </group>
+      <SearchBar />
       <Controls />
     </group>
   )

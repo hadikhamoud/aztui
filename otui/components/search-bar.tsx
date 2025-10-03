@@ -14,7 +14,7 @@ export function SearchBar() {
   return (
     <group width="100%" height={1}>
       <text>
-        Search {focusedBox}: {searchQuery}
+        /{searchQuery}
       </text>
     </group>
   )

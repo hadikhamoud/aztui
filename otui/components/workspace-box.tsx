@@ -1,4 +1,4 @@
-import { Logo } from "./logo_2"
+import { Logo } from "./logo"
 import { Select } from "./select"
 import { CloneView } from "./clone-view"
 import { useAppStore } from "../store/app-store"
@@ -53,7 +53,7 @@ export function WorkspaceBox() {
       padding={2} 
       borderStyle="rounded"
       width={width / 2}
-      height={height - 1}
+      height={height - 2}
       borderColor={isFocused ? "#007595" : "white"}
     >
       <group flexDirection="column">
