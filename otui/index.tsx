@@ -1,5 +1,5 @@
-import { render } from "@opentui/react"
-import { useKeyboard } from "@opentui/react"
+import { createCliRenderer } from "@opentui/core"
+import { useKeyboard, createRoot } from "@opentui/react"
 import { useTerminalDimensions } from "@opentui/react"
 import { useAppStore } from "./store/app-store"
 import { ProjectBox } from "./components/project-box"
@@ -10,91 +10,158 @@ import { SearchBar } from "./components/search-bar"
 
 function App() {
   const { width, height } = useTerminalDimensions()
-  const {
-    focusedBox,
-    cycleFocus,
-    selectedProject,
-    selectedRepo,
-    loadRepos,
-    setFocusedBox,
-    enterWorkspace,
-    exitWorkspace,
-    isInWorkspace,
-    isSearchActive,
-    setSearchActive,
-    searchQuery,
-    setSearchQuery,
-    clearSearch
-  } = useAppStore()
+  // Subscribe to trigger re-renders, but use getState() in keyboard handler for fresh values
+  useAppStore()
 
 
 
   useKeyboard((key) => {
-    if (isSearchActive) {
+    // Get fresh state from store to avoid stale closures
+    const state = useAppStore.getState()
+    
+    if (state.isSearchActive) {
       if (key.name === "escape") {
-        clearSearch()
+        state.clearSearch()
         return
+      }
+
+      if (key.name === "return") {
+        state.selectHighlightedOption()
+        return
+      }
+
+      if (key.name === "up") {
+        state.moveSearchHighlight('up')
+        return
+      }
+
+      if (key.name === "down") {
+        state.moveSearchHighlight('down')
+        return
+      }
+
+      if (key.name === "backspace") {
+        state.setSearchQuery(state.searchQuery.slice(0, -1))
+        return
+      }
+
+      if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
+        state.setSearchQuery(state.searchQuery + key.sequence)
+        return
+      }
+
+      return
+    }
+
+    // Handle Clone View keyboard input
+    if (state.isInCloneView && state.focusedBox === 'workspace') {
+      if (key.name === "escape") {
+        state.exitCloneView()
+        return
+      }
+      
+      if (key.name === "tab") {
+        // Toggle between method and path fields
+        state.setCloneFocusedField(state.cloneFocusedField === 'method' ? 'path' : 'method')
+        return
+      }
+      
+      if (state.cloneFocusedField === 'method') {
+        if (key.name === "left" || key.name === "right") {
+          state.toggleCloneMethod()
+          return
+        }
+      }
+      
+      if (state.cloneFocusedField === 'path') {
+        if (key.name === "backspace") {
+          state.setCloneLocation(state.cloneLocation.slice(0, -1))
+          return
+        }
+        if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
+          state.setCloneLocation(state.cloneLocation + key.sequence)
+          return
+        }
       }
       
       if (key.name === "return") {
-        setSearchActive(false)
-        return
-      }
-      
-      if (key.name === "backspace") {
-        setSearchQuery(searchQuery.slice(0, -1))
-        return
-      }
-      
-      if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
-        setSearchQuery(searchQuery + key.sequence)
+        // If no location specified, use current directory with repo name
+        if (!state.cloneLocation.trim() && state.selectedRepo) {
+          state.setCloneLocation(`./${state.selectedRepo.name}`)
+        }
+        state.executeClone()
         return
       }
       
       return
     }
-    
-    if (key.sequence === "/" && !isSearchActive) {
-      setSearchActive(true)
-      setSearchQuery("")
+
+    // Handle Pipelines View keyboard input
+    if (state.isInPipelinesView && state.focusedBox === 'workspace') {
+      if (key.name === "escape") {
+        if (state.selectedPipeline) {
+          // Go back from runs to pipeline list
+          state.goBackFromRuns()
+        } else {
+          // Exit pipelines view
+          state.exitPipelinesView()
+        }
+        return
+      }
       return
     }
-    
+
+    // Handle PRs View keyboard input
+    if (state.isInPRsView && state.focusedBox === 'workspace') {
+      if (key.name === "escape") {
+        state.exitPRsView()
+        return
+      }
+      return
+    }
+
+    if (key.sequence === "/") {
+      state.setSearchActive(true)
+      state.setSearchQuery("")
+      return
+    }
+
     if (key.name === "tab") {
-      cycleFocus()
+      state.cycleFocus()
     }
     if (key.name === "return") {
-      if (focusedBox === "projects" && selectedProject) {
-        loadRepos(selectedProject.value)
-        setFocusedBox("repos")
+      if (state.focusedBox === "projects" && state.selectedProject) {
+        state.loadRepos(state.selectedProject.value)
+        state.setFocusedBox("repos")
       }
-      if (focusedBox === "repos" && selectedRepo) {
-        enterWorkspace()
+      if (state.focusedBox === "repos" && state.selectedRepo) {
+        state.enterWorkspace()
       }
-      if (focusedBox === "workspace" && isInWorkspace) {
-        console.log("workspace option selected")
+      if (state.focusedBox === "workspace" && state.isInWorkspace) {
+        // Workspace option selection is handled by the Select component
       }
     }
     if (key.name === "escape") {
-      if (isInWorkspace) {
-        exitWorkspace()
+      if (state.isInWorkspace) {
+        state.exitWorkspace()
       }
     }
   })
 
   return (
-    <group width={width} height={height} flexDirection="column">
-      <group width={width} height={height - 2} flexDirection="row">
-        <group flexDirection="column" width={width / 2} height={height - 2}>
+    <box width={width} height={height} flexDirection="column">
+      <box width={width} height={height - 2} flexDirection="row">
+        <box flexDirection="column" width={width / 2} height={height - 2}>
           <ProjectBox />
           <RepoBox />
-        </group>
+        </box>
         <WorkspaceBox />
-      </group>
+      </box>
       <SearchBar />
       <Controls />
-    </group>
+    </box>
   )
 }
 
-render(<App />)
+const renderer = await createCliRenderer()
+createRoot(renderer).render(<App />)
