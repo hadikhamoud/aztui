@@ -1,21 +1,26 @@
 import { useAppStore } from "../store/app-store"
 
 export function SearchBar() {
-  const { 
-    isSearchActive, 
+  const {
+    isSearchActive,
     searchQuery,
-    focusedBox
+    searchTargetBox
   } = useAppStore()
 
   if (!isSearchActive) {
     return null
   }
 
+  const targetLabel = searchTargetBox === 'projects' ? 'projects' 
+    : searchTargetBox === 'repos' ? 'repos' 
+    : searchTargetBox === 'workspace' ? 'workspace' 
+    : ''
+
   return (
-    <group width="100%" height={1}>
+    <box width="100%" height={1}>
       <text>
-        /{searchQuery}
+        /{searchQuery} ({targetLabel})
       </text>
-    </group>
+    </box>
   )
 }

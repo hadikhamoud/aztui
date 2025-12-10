@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SelectOption } from '@opentui/core'
-import { getProjects, getRepos, cloneRepo } from '../api'
+import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns } from '../api'
 
 type FocusedBox = 'projects' | 'repos' | 'workspace'
 
@@ -38,6 +38,7 @@ interface AppStore {
   isSelectMode: boolean
   searchQuery: string
   searchHighlightedIndex: number
+  searchTargetBox: FocusedBox | null  // The box that search applies to (locked when search starts)
   setSearchActive: (active: boolean) => void
   setSelectMode: (active: boolean) => void
   setSearchQuery: (query: string) => void
@@ -65,6 +66,32 @@ interface AppStore {
   setCloneFocusedField: (field: 'method' | 'path') => void
   executeClone: () => Promise<void>
   clearCloneStatus: () => void
+
+  // Pipelines functionality
+  isInPipelinesView: boolean
+  pipelines: SelectOption[]
+  selectedPipeline: SelectOption | null
+  pipelineRuns: SelectOption[]
+  selectedPipelineRun: SelectOption | null
+  pipelinesLoading: boolean
+  pipelineRunsLoading: boolean
+  enterPipelinesView: () => void
+  exitPipelinesView: () => void
+  loadPipelines: () => Promise<void>
+  selectPipeline: (pipeline: SelectOption) => void
+  loadPipelineRuns: (pipelineId: number) => Promise<void>
+  selectPipelineRun: (run: SelectOption) => void
+  goBackFromRuns: () => void
+
+  // Pull Requests functionality
+  isInPRsView: boolean
+  pullRequests: SelectOption[]
+  selectedPR: SelectOption | null
+  prsLoading: boolean
+  enterPRsView: () => void
+  exitPRsView: () => void
+  loadPullRequests: () => Promise<void>
+  selectPR: (pr: SelectOption) => void
 }
 
 const focusOrder: FocusedBox[] = ['projects', 'repos', 'workspace']
@@ -170,10 +197,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
   isSelectMode: false,
   searchQuery: '',
   searchHighlightedIndex: 0,
+  searchTargetBox: null,
   setSearchActive: (active: boolean) => {
-    set({ isSearchActive: active, searchHighlightedIndex: 0, isSelectMode: false })
-    if (!active) {
-      set({ searchQuery: '' })
+    const state = get()
+    if (active) {
+      // Lock search to the currently focused box
+      set({ 
+        isSearchActive: true, 
+        searchHighlightedIndex: 0, 
+        isSelectMode: false,
+        searchTargetBox: state.focusedBox 
+      })
+    } else {
+      set({ 
+        isSearchActive: false, 
+        searchQuery: '', 
+        searchHighlightedIndex: 0,
+        searchTargetBox: null 
+      })
     }
   },
   setSelectMode: (active: boolean) => set({ isSelectMode: active }),
@@ -181,7 +222,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ searchQuery: query, searchHighlightedIndex: 0 })
   },
   setSearchHighlightedIndex: (index: number) => set({ searchHighlightedIndex: index }),
-  clearSearch: () => set({ searchQuery: '', isSearchActive: false, isSelectMode: false, searchHighlightedIndex: 0 }),
+  clearSearch: () => set({ searchQuery: '', isSearchActive: false, isSelectMode: false, searchHighlightedIndex: 0, searchTargetBox: null }),
   enterSelectMode: () => {
     const state = get()
     const highlightedIndex = state.getHighlightedIndexForLastSelected(state.focusedBox)
@@ -225,7 +266,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   moveSearchHighlight: (direction: 'up' | 'down') => {
     const state = get()
-    const filteredOptions = state.getFilteredOptions(state.focusedBox)
+    const targetBox = state.searchTargetBox || state.focusedBox
+    const filteredOptions = state.getFilteredOptions(targetBox)
     
     if (filteredOptions.length === 0) return
     
@@ -242,14 +284,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   selectHighlightedOption: () => {
     const state = get()
-    const filteredOptions = state.getFilteredOptions(state.focusedBox)
+    const targetBox = state.searchTargetBox || state.focusedBox
+    const filteredOptions = state.getFilteredOptions(targetBox)
     const highlightedOption = filteredOptions[state.searchHighlightedIndex]
     
     if (highlightedOption) {
       // Clear search first to prevent restoration conflicts
-      set({ isSearchActive: false, isSelectMode: false, searchQuery: '', searchHighlightedIndex: 0 })
+      set({ isSearchActive: false, isSelectMode: false, searchQuery: '', searchHighlightedIndex: 0, searchTargetBox: null })
       
-      if (state.focusedBox === 'projects') {
+      if (targetBox === 'projects') {
         const project = state.projects.find(p => p.value === highlightedOption.value)
         if (project) {
           const index = state.projects.findIndex(p => p.value === highlightedOption.value)
@@ -257,14 +300,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
           state.loadRepos(project.value)
           state.setFocusedBox('repos')
         }
-      } else if (state.focusedBox === 'repos') {
+      } else if (targetBox === 'repos') {
         const repo = state.repos.find(r => r.value === highlightedOption.value)
         if (repo) {
           const index = state.repos.findIndex(r => r.value === highlightedOption.value)
           state.selectRepo(repo, index)
           state.enterWorkspace()
         }
-      } else if (state.focusedBox === 'workspace') {
+      } else if (targetBox === 'workspace') {
         state.selectWorkspaceOption(highlightedOption)
       }
     } else {
@@ -420,5 +463,133 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   clearCloneStatus: () => {
     set({ cloneStatus: null })
+  },
+
+  // Pipelines functionality
+  isInPipelinesView: false,
+  pipelines: [],
+  selectedPipeline: null,
+  pipelineRuns: [],
+  selectedPipelineRun: null,
+  pipelinesLoading: false,
+  pipelineRunsLoading: false,
+  enterPipelinesView: () => {
+    const state = get()
+    set({ 
+      isInPipelinesView: true, 
+      pipelines: [],
+      selectedPipeline: null,
+      pipelineRuns: [],
+      selectedPipelineRun: null
+    })
+    state.loadPipelines()
+  },
+  exitPipelinesView: () => {
+    set({ 
+      isInPipelinesView: false,
+      pipelines: [],
+      selectedPipeline: null,
+      pipelineRuns: [],
+      selectedPipelineRun: null
+    })
+  },
+  loadPipelines: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo) return
+    
+    set({ pipelinesLoading: true })
+    try {
+      const definitions = await getBuildDefinitions(state.selectedProject.value, state.selectedRepo.value)
+      const options = definitions?.map(def => ({
+        name: `${def.name}`,
+        value: `${def.id}`,
+        description: def.path || ''
+      })) || []
+      set({ pipelines: options, pipelinesLoading: false })
+    } catch (error) {
+      console.error('Failed to load pipelines:', error)
+      set({ pipelinesLoading: false })
+    }
+  },
+  selectPipeline: (pipeline: SelectOption) => {
+    const state = get()
+    set({ selectedPipeline: pipeline, pipelineRuns: [], selectedPipelineRun: null })
+    state.loadPipelineRuns(parseInt(pipeline.value))
+  },
+  loadPipelineRuns: async (pipelineId: number) => {
+    const state = get()
+    if (!state.selectedProject) return
+    
+    set({ pipelineRunsLoading: true })
+    try {
+      const builds = await getBuildRuns(state.selectedProject.value, pipelineId)
+      const options = builds?.map(build => {
+        const statusIcon = build.result === 2 ? 'ok' : build.result === 8 ? 'fail' : 'run'
+        const statusText = build.result === 2 ? 'succeeded' : build.result === 8 ? 'failed' : build.status === 1 ? 'in progress' : 'unknown'
+        return {
+          name: `[${statusIcon}] #${build.buildNumber} - ${statusText}`,
+          value: `${build.id}`,
+          description: build.sourceBranch || ''
+        }
+      }) || []
+      set({ pipelineRuns: options, pipelineRunsLoading: false })
+    } catch (error) {
+      console.error('Failed to load pipeline runs:', error)
+      set({ pipelineRunsLoading: false })
+    }
+  },
+  selectPipelineRun: (run: SelectOption) => {
+    set({ selectedPipelineRun: run })
+  },
+  goBackFromRuns: () => {
+    set({ selectedPipeline: null, pipelineRuns: [], selectedPipelineRun: null })
+  },
+
+  // Pull Requests functionality
+  isInPRsView: false,
+  pullRequests: [],
+  selectedPR: null,
+  prsLoading: false,
+  enterPRsView: () => {
+    const state = get()
+    set({ 
+      isInPRsView: true, 
+      pullRequests: [],
+      selectedPR: null
+    })
+    state.loadPullRequests()
+  },
+  exitPRsView: () => {
+    set({ 
+      isInPRsView: false,
+      pullRequests: [],
+      selectedPR: null
+    })
+  },
+  loadPullRequests: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo) return
+    
+    set({ prsLoading: true })
+    try {
+      const prs = await getPullRequests(state.selectedProject.value, state.selectedRepo.value)
+      const options = prs?.map(pr => ({
+        name: `#${pr.pullRequestId} - ${pr.title}`,
+        value: `${pr.pullRequestId}`,
+        description: JSON.stringify({
+          author: pr.createdBy?.displayName || 'Unknown',
+          sourceBranch: pr.sourceRefName?.replace('refs/heads/', '') || '',
+          targetBranch: pr.targetRefName?.replace('refs/heads/', '') || '',
+          status: pr.status === 1 ? 'active' : pr.status === 2 ? 'abandoned' : pr.status === 3 ? 'completed' : 'unknown'
+        })
+      })) || []
+      set({ pullRequests: options, prsLoading: false })
+    } catch (error) {
+      console.error('Failed to load pull requests:', error)
+      set({ prsLoading: false })
+    }
+  },
+  selectPR: (pr: SelectOption) => {
+    set({ selectedPR: pr })
   },
 }))

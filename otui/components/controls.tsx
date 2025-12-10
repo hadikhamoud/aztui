@@ -1,7 +1,16 @@
 import { useAppStore } from "../store/app-store"
 
 export function Controls() {
-  const { focusedBox, isInWorkspace, isInCloneView, cloneFocusedField, isSearchActive } = useAppStore()
+  const { 
+    focusedBox, 
+    isInWorkspace, 
+    isInCloneView, 
+    isInPipelinesView,
+    isInPRsView,
+    cloneFocusedField, 
+    isSearchActive,
+    selectedPipeline
+  } = useAppStore()
 
   const getControlsText = () => {
     if (isSearchActive) {
@@ -14,6 +23,17 @@ export function Controls() {
       } else {
         return "Tab: Previous field | Enter: Clone | Esc: Back | Type: Enter path"
       }
+    }
+
+    if (isInPipelinesView && focusedBox === 'workspace') {
+      if (selectedPipeline) {
+        return "Enter: Select run | Esc: Back to pipelines | Arrow Keys: Navigate"
+      }
+      return "Enter: View runs | Esc: Back to options | Arrow Keys: Navigate"
+    }
+
+    if (isInPRsView && focusedBox === 'workspace') {
+      return "Enter: Select PR | Esc: Back to options | Arrow Keys: Navigate"
     }
     
     if (isInWorkspace) {

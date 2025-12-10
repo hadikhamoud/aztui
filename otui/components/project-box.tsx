@@ -15,17 +15,29 @@ export function ProjectBox() {
     clearSearch,
     isSearchActive,
     isSelectMode,
-    searchHighlightedIndex
+    searchHighlightedIndex,
+    searchTargetBox
   } = useAppStore()
 
   const isFocused = focusedBox === 'projects'
-  const displayOptions = isFocused ? getFilteredOptions('projects') : projects
+  const isSearchTarget = searchTargetBox === 'projects'
+  const displayOptions = isSearchTarget ? getFilteredOptions('projects') : projects
 
   useEffect(() => {
     loadProjects()
   }, [loadProjects])
 
+  const handleChange = (value: string) => {
+    // Track selection as we navigate with arrow keys
+    const project = projects.find(p => p.value === value)
+    if (project) {
+      const index = projects.findIndex(p => p.value === value)
+      selectProject(project, index)
+    }
+  }
+
   const handleSelect = (value: string) => {
+    // On Enter, select and clear search
     const project = projects.find(p => p.value === value)
     if (project) {
       const index = projects.findIndex(p => p.value === value)
@@ -46,9 +58,10 @@ export function ProjectBox() {
         options={displayOptions} 
         focused={isFocused} 
         value={selectedProject?.value}
-        highlightedIndex={isSearchActive && isFocused ? searchHighlightedIndex : undefined}
+        highlightedIndex={isSearchActive && isSearchTarget ? searchHighlightedIndex : undefined}
         isSearchActive={isSearchActive}
         isSelectMode={isSelectMode}
+        onChange={handleChange}
         onSelect={handleSelect}
       />
     </box>

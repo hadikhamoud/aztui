@@ -1,4 +1,4 @@
-import { SelectRenderable, type SelectRenderableOptions } from "@opentui/core"
+import { SelectRenderable, type SelectRenderableOptions, type SelectOption } from "@opentui/core"
 import { extend } from "@opentui/react"
 
 interface ExtendedSelectRenderableOptions extends SelectRenderableOptions {
@@ -6,23 +6,42 @@ interface ExtendedSelectRenderableOptions extends SelectRenderableOptions {
 }
 
 class ExtendedSelectRenderable extends SelectRenderable {
+  private _value: any = undefined
+
   constructor(id: string, options: ExtendedSelectRenderableOptions) {
     super(id, options)
 
     if (options.value !== undefined) {
-      this.value = options.value
+      this._value = options.value
+      this.syncSelectedIndex()
     }
   }
 
   get value(): any {
-    const selected = this.getSelectedOption()
-    return selected ? selected.value : undefined
+    return this._value
   }
 
   set value(val: any) {
-    const idx = this.options.findIndex(opt => opt.value === val)
-    if (idx >= 0) {
-      this.setSelectedIndex(idx)
+    this._value = val
+    this.syncSelectedIndex()
+  }
+
+  // Override options setter to re-sync selected index when options change
+  set options(opts: SelectOption[]) {
+    super.options = opts
+    this.syncSelectedIndex()
+  }
+
+  get options(): SelectOption[] {
+    return super.options
+  }
+
+  private syncSelectedIndex() {
+    if (this._value !== undefined) {
+      const idx = this.options.findIndex(opt => opt.value === this._value)
+      if (idx >= 0) {
+        this.setSelectedIndex(idx)
+      }
     }
   }
 }

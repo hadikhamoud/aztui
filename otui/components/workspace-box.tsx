@@ -1,15 +1,17 @@
 import { Logo } from "./logo"
 import { Select } from "./select"
 import { CloneView } from "./clone-view"
+import { PipelinesView } from "./pipelines-view"
+import { PRsView } from "./prs-view"
 import { useAppStore } from "../store/app-store"
 import { useTerminalDimensions } from "@opentui/react"
 
 export function WorkspaceBox() {
   const { width, height } = useTerminalDimensions()
-  const { 
-    selectedProject, 
-    selectedRepo, 
-    isInWorkspace, 
+  const {
+    selectedProject,
+    selectedRepo,
+    isInWorkspace,
     workspaceOptions,
     selectedWorkspaceOption,
     focusedBox,
@@ -20,7 +22,11 @@ export function WorkspaceBox() {
     isSelectMode,
     searchHighlightedIndex,
     isInCloneView,
-    enterCloneView
+    isInPipelinesView,
+    isInPRsView,
+    enterCloneView,
+    enterPipelinesView,
+    enterPRsView
   } = useAppStore()
 
   const isFocused = focusedBox === 'workspace'
@@ -32,6 +38,10 @@ export function WorkspaceBox() {
       selectWorkspaceOption(option)
       if (value === 'clone') {
         enterCloneView()
+      } else if (value === 'pipelines') {
+        enterPipelinesView()
+      } else if (value === 'prs') {
+        enterPRsView()
       }
       clearSearch()
     }
@@ -42,50 +52,72 @@ export function WorkspaceBox() {
       if (isInCloneView) {
         return `${selectedRepo.name} - clone`
       }
+      if (isInPipelinesView) {
+        return `${selectedRepo.name} - pipelines`
+      }
+      if (isInPRsView) {
+        return `${selectedRepo.name} - pull requests`
+      }
       return `${selectedRepo.name} - options`
     }
     return "workspace"
   }
 
+  const renderContent = () => {
+    if (!isInWorkspace || !selectedRepo) {
+      return (
+        <>
+          <Logo />
+          {selectedProject && (
+            <text>Selected Project: {selectedProject.name}</text>
+          )}
+          {selectedRepo && (
+            <text>Selected Repo: {selectedRepo.name}</text>
+          )}
+          <text>
+            Select a repo to view options
+          </text>
+        </>
+      )
+    }
+
+    if (isInCloneView) {
+      return <CloneView />
+    }
+
+    if (isInPipelinesView) {
+      return <PipelinesView />
+    }
+
+    if (isInPRsView) {
+      return <PRsView />
+    }
+
+    return (
+      <Select
+        options={displayOptions}
+        focused={isFocused}
+        value={selectedWorkspaceOption?.value}
+        highlightedIndex={isSearchActive && isFocused ? searchHighlightedIndex : undefined}
+        isSearchActive={isSearchActive}
+        isSelectMode={isSelectMode}
+        onSelect={handleSelect}
+      />
+    )
+  }
+
   return (
-    <box 
+    <box
       title={getTitle()}
-      padding={2} 
+      padding={2}
       borderStyle="rounded"
       width={width / 2}
       height={height - 2}
       borderColor={isFocused ? "#007595" : "white"}
     >
-      <group flexDirection="column">
-        {isInWorkspace && selectedRepo ? (
-          isInCloneView ? (
-            <CloneView />
-          ) : (
-            <Select 
-              options={displayOptions}
-              focused={isFocused}
-              value={selectedWorkspaceOption?.value}
-              highlightedIndex={isSearchActive && isFocused ? searchHighlightedIndex : undefined}
-              isSearchActive={isSearchActive}
-              isSelectMode={isSelectMode}
-              onSelect={handleSelect}
-            />
-          )
-        ) : (
-          <>
-            <Logo />
-            {selectedProject && (
-              <text>Selected Project: {selectedProject.name}</text>
-            )}
-            {selectedRepo && (
-              <text>Selected Repo: {selectedRepo.name}</text>
-            )}
-            <text>
-              Select a repo to view options
-            </text>
-          </>
-        )}
-      </group>
+      <box flexDirection="column">
+        {renderContent()}
+      </box>
     </box>
   )
 }
