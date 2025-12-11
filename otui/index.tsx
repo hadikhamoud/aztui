@@ -113,9 +113,162 @@ function App() {
 
     // Handle PRs View keyboard input
     if (state.isInPRsView && state.focusedBox === 'workspace') {
-      if (key.name === "escape") {
-        state.exitPRsView()
+      // Handle comment input mode
+      if (state.isAddingComment) {
+        if (key.name === "escape") {
+          state.cancelAddingComment()
+          return
+        }
+        if (key.name === "return" && key.ctrl) {
+          state.submitComment()
+          return
+        }
+        if (key.name === "backspace") {
+          state.setCommentText(state.commentText.slice(0, -1))
+          return
+        }
+        if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
+          state.setCommentText(state.commentText + key.sequence)
+          return
+        }
+        if (key.name === "return") {
+          state.setCommentText(state.commentText + '\n')
+          return
+        }
         return
+      }
+      
+      // Handle completion message input mode
+      if (state.isCompletingPR) {
+        if (key.name === "escape") {
+          state.cancelCompletingPR()
+          return
+        }
+        if (key.name === "return" && key.ctrl) {
+          state.submitCompletion()
+          return
+        }
+        if (key.name === "backspace") {
+          state.setCompletionMessage(state.completionMessage.slice(0, -1))
+          return
+        }
+        if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
+          state.setCompletionMessage(state.completionMessage + key.sequence)
+          return
+        }
+        if (key.name === "return") {
+          state.setCompletionMessage(state.completionMessage + '\n')
+          return
+        }
+        return
+      }
+      
+      // Handle adding reviewer mode
+      if (state.isAddingReviewer) {
+        if (key.name === "escape") {
+          state.cancelAddingReviewer()
+          return
+        }
+        if (key.name === "return") {
+          state.submitReviewer()
+          return
+        }
+        if (key.name === "up" || key.name === "k") {
+          state.navigateReviewer('up')
+          return
+        }
+        if (key.name === "down" || key.name === "j") {
+          state.navigateReviewer('down')
+          return
+        }
+        if (key.name === "r") {
+          state.toggleReviewerRequired()
+          return
+        }
+        return
+      }
+      
+      if (key.name === "escape") {
+        if (state.selectedConflict) {
+          // Go back from conflict view
+          state.exitConflictView()
+        } else if (state.selectedPRFile) {
+          // Go back from diff view to file list
+          state.goBackFromPRFiles()
+        } else if (state.selectedPR) {
+          // Go back from file list to PR list
+          state.goBackFromPRFiles()
+        } else {
+          // Exit PRs view completely
+          state.exitPRsView()
+        }
+        return
+      }
+      
+      // If viewing a conflict, handle navigation
+      if (state.selectedConflict) {
+        if (key.name === "up" || key.name === "k") {
+          state.navigateConflict('up')
+          return
+        }
+        if (key.name === "down" || key.name === "j") {
+          state.navigateConflict('down')
+          return
+        }
+        return
+      }
+      
+      // PR Actions (when a PR is selected)
+      if (state.selectedPR) {
+        if (key.name === "o") {
+          state.openPRInBrowser()
+          return
+        }
+        if (key.name === "a") {
+          state.approvePR()
+          return
+        }
+        if (key.name === "c") {
+          state.startAddingComment()
+          return
+        }
+        if (key.name === "m") {
+          state.startCompletingPR()
+          return
+        }
+        if (key.name === "d") {
+          state.toggleDraft()
+          return
+        }
+        if (key.name === "r") {
+          state.startAddingReviewer()
+          return
+        }
+        // View conflicts
+        if (key.name === "x" && state.prConflicts.length > 0) {
+          state.selectConflict(state.selectedConflictIndex)
+          return
+        }
+      }
+      
+      // Navigate through files when viewing a PR
+      if (state.selectedPR && state.prFileChanges.length > 0) {
+        if (key.name === "up" || key.name === "k") {
+          state.navigatePRFile('up')
+          return
+        }
+        if (key.name === "down" || key.name === "j") {
+          state.navigatePRFile('down')
+          return
+        }
+        if (key.name === "return") {
+          // Select the highlighted file to view diff
+          const file = state.prFileChanges[state.selectedPRFileIndex]
+          if (file && !state.selectedPRFile) {
+            state.selectPRFile(file, state.selectedPRFileIndex)
+          }
+          return
+        }
       }
       return
     }
@@ -151,7 +304,7 @@ function App() {
   return (
     <box width={width} height={height} flexDirection="column">
       <box width={width} height={height - 2} flexDirection="row">
-        <box flexDirection="column" width={width / 2} height={height - 2}>
+        <box flexDirection="column" width={Math.floor(width / 3)} height={height - 2}>
           <ProjectBox />
           <RepoBox />
         </box>

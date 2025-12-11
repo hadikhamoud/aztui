@@ -67,10 +67,6 @@ export function CloneView() {
           </text>
         </box>
       )}
-
-      <text fg="#888888">
-        Tab: Switch field | Left/Right: Change method | Enter: Clone | Esc: Back
-      </text>
     </box>
   )
 }

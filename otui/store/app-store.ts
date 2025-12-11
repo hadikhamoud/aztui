@@ -1,6 +1,46 @@
 import { create } from 'zustand'
 import type { SelectOption } from '@opentui/core'
-import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns } from '../api'
+import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails } from '../api'
+
+export interface PRFileChange {
+  path: string
+  changeType: string
+  originalContent: string
+  modifiedContent: string
+}
+
+export interface PRThread {
+  id: number
+  status: string
+  comments: { author: string; content: string; date: string }[]
+  isResolved: boolean
+}
+
+export interface PRReviewer {
+  id: string
+  displayName: string
+  vote: number // -10 = rejected, -5 = waiting, 0 = no vote, 5 = approved with suggestions, 10 = approved
+  isRequired: boolean
+  imageUrl?: string
+}
+
+export interface PRStatus {
+  id: number
+  state: string // pending, succeeded, failed, error
+  description: string
+  context: string
+  targetUrl?: string
+}
+
+export interface PRConflict {
+  conflictId: number
+  conflictType: string
+  conflictPath: string
+  sourceContent?: string
+  targetContent?: string
+  baseContent?: string
+  rawConflict?: any
+}
 
 type FocusedBox = 'projects' | 'repos' | 'workspace'
 
@@ -88,10 +128,66 @@ interface AppStore {
   pullRequests: SelectOption[]
   selectedPR: SelectOption | null
   prsLoading: boolean
+  prFileChanges: PRFileChange[]
+  prFileChangesLoading: boolean
+  selectedPRFile: PRFileChange | null
+  selectedPRFileIndex: number
+  prActionStatus: { message: string; isError: boolean } | null
+  prActionLoading: boolean
+  isAddingComment: boolean
+  commentText: string
+  isCompletingPR: boolean
+  completionMessage: string
+  
+  // PR Details
+  prIsDraft: boolean
+  prThreads: PRThread[]
+  prReviewers: PRReviewer[]
+  prStatuses: PRStatus[]
+  prConflicts: PRConflict[]
+  prDetailsLoading: boolean
+  
+  // Conflict viewing
+  selectedConflict: PRConflict | null
+  selectedConflictIndex: number
+  conflictContentLoading: boolean
+  
+  // Reviewer management
+  isAddingReviewer: boolean
+  teamMembers: { id: string; displayName: string }[]
+  selectedReviewerIndex: number
+  reviewerIsRequired: boolean
+  
   enterPRsView: () => void
   exitPRsView: () => void
   loadPullRequests: () => Promise<void>
   selectPR: (pr: SelectOption) => void
+  loadPRFileChanges: (prId: number) => Promise<void>
+  loadPRDetails: (prId: number) => Promise<void>
+  selectPRFile: (file: PRFileChange, index: number) => void
+  navigatePRFile: (direction: 'up' | 'down') => void
+  goBackFromPRFiles: () => void
+  openPRInBrowser: () => void
+  approvePR: () => Promise<void>
+  startAddingComment: () => void
+  cancelAddingComment: () => void
+  setCommentText: (text: string) => void
+  submitComment: () => Promise<void>
+  startCompletingPR: () => void
+  cancelCompletingPR: () => void
+  setCompletionMessage: (message: string) => void
+  submitCompletion: () => Promise<void>
+  clearPRActionStatus: () => void
+  toggleDraft: () => Promise<void>
+  startAddingReviewer: () => void
+  cancelAddingReviewer: () => void
+  navigateReviewer: (direction: 'up' | 'down') => void
+  toggleReviewerRequired: () => void
+  submitReviewer: () => Promise<void>
+  removeReviewer: (reviewerId: string) => Promise<void>
+  selectConflict: (index: number) => Promise<void>
+  navigateConflict: (direction: 'up' | 'down') => void
+  exitConflictView: () => void
 }
 
 const focusOrder: FocusedBox[] = ['projects', 'repos', 'workspace']
@@ -162,8 +258,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         name: `${r.name}`,
         value: `${r.id}`,
         description: JSON.stringify({
-          httpsUrl: r.cloneUrl,
-          sshUrl: r.sshUrl || `git@ssh.dev.azure.com:v3/${selectedProject?.name}/${selectedProject?.name}/${r.name}`
+          httpsUrl: (r as any).cloneUrl || r.webUrl,
+          sshUrl: (r as any).sshUrl || `git@ssh.dev.azure.com:v3/${selectedProject?.name}/${selectedProject?.name}/${r.name}`
         }),
       })) || []
       set({ repos: options })
@@ -499,12 +595,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     set({ pipelinesLoading: true })
     try {
-      const definitions = await getBuildDefinitions(state.selectedProject.value, state.selectedRepo.value)
-      const options = definitions?.map(def => ({
+      // Get all build definitions for the project
+      const definitions = await getBuildDefinitions(state.selectedProject.value)
+      
+      // Filter pipelines by matching repo name in the pipeline name
+      const repoName = state.selectedRepo.name.toLowerCase()
+      const filteredDefinitions = definitions?.filter(def => 
+        def.name?.toLowerCase().includes(repoName)
+      ) || []
+      
+      const options = filteredDefinitions.map(def => ({
         name: `${def.name}`,
         value: `${def.id}`,
         description: def.path || ''
-      })) || []
+      }))
+      
       set({ pipelines: options, pipelinesLoading: false })
     } catch (error) {
       console.error('Failed to load pipelines:', error)
@@ -550,12 +655,48 @@ export const useAppStore = create<AppStore>((set, get) => ({
   pullRequests: [],
   selectedPR: null,
   prsLoading: false,
+  prFileChanges: [],
+  prFileChangesLoading: false,
+  selectedPRFile: null,
+  selectedPRFileIndex: 0,
+  
+  // PR Details
+  prIsDraft: false,
+  prThreads: [],
+  prReviewers: [],
+  prStatuses: [],
+  prConflicts: [],
+  prDetailsLoading: false,
+  
+  // Conflict viewing
+  selectedConflict: null,
+  selectedConflictIndex: 0,
+  conflictContentLoading: false,
+  
+  // Reviewer management
+  isAddingReviewer: false,
+  teamMembers: [],
+  selectedReviewerIndex: 0,
+  reviewerIsRequired: false,
+  
   enterPRsView: () => {
     const state = get()
     set({ 
       isInPRsView: true, 
       pullRequests: [],
-      selectedPR: null
+      selectedPR: null,
+      prFileChanges: [],
+      selectedPRFile: null,
+      selectedPRFileIndex: 0,
+      prIsDraft: false,
+      prThreads: [],
+      prReviewers: [],
+      prStatuses: [],
+      prConflicts: [],
+      prDetailsLoading: false,
+      selectedConflict: null,
+      selectedConflictIndex: 0,
+      conflictContentLoading: false
     })
     state.loadPullRequests()
   },
@@ -563,7 +704,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ 
       isInPRsView: false,
       pullRequests: [],
-      selectedPR: null
+      selectedPR: null,
+      prFileChanges: [],
+      selectedPRFile: null,
+      selectedPRFileIndex: 0,
+      prIsDraft: false,
+      prThreads: [],
+      prReviewers: [],
+      prStatuses: [],
+      prConflicts: [],
+      prDetailsLoading: false,
+      isAddingReviewer: false,
+      teamMembers: [],
+      selectedReviewerIndex: 0,
+      selectedConflict: null,
+      selectedConflictIndex: 0,
+      conflictContentLoading: false
     })
   },
   loadPullRequests: async () => {
@@ -578,8 +734,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         value: `${pr.pullRequestId}`,
         description: JSON.stringify({
           author: pr.createdBy?.displayName || 'Unknown',
-          sourceBranch: pr.sourceRefName?.replace('refs/heads/', '') || '',
-          targetBranch: pr.targetRefName?.replace('refs/heads/', '') || '',
+          sourceBranch: pr.sourceRefName || '',
+          targetBranch: pr.targetRefName || '',
           status: pr.status === 1 ? 'active' : pr.status === 2 ? 'abandoned' : pr.status === 3 ? 'completed' : 'unknown'
         })
       })) || []
@@ -590,6 +746,555 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   selectPR: (pr: SelectOption) => {
-    set({ selectedPR: pr })
+    const state = get()
+    set({ 
+      selectedPR: pr, 
+      prFileChanges: [], 
+      selectedPRFile: null, 
+      selectedPRFileIndex: 0,
+      prIsDraft: false,
+      prThreads: [],
+      prReviewers: [],
+      prStatuses: [],
+      prConflicts: [],
+      prDetailsLoading: true
+    })
+    // Load file changes and PR details in parallel
+    state.loadPRFileChanges(parseInt(pr.value))
+    state.loadPRDetails(parseInt(pr.value))
+  },
+  
+  loadPRDetails: async (prId: number) => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo) return
+    
+    set({ prDetailsLoading: true })
+    try {
+      // Load all PR details in parallel
+      const [prDetails, threads, reviewers, statuses, conflicts] = await Promise.all([
+        getPullRequestDetails(state.selectedProject.value, state.selectedRepo.value, prId),
+        getPullRequestThreads(state.selectedProject.value, state.selectedRepo.value, prId),
+        getPullRequestReviewers(state.selectedProject.value, state.selectedRepo.value, prId),
+        getPullRequestStatuses(state.selectedProject.value, state.selectedRepo.value, prId),
+        getPullRequestConflicts(state.selectedProject.value, state.selectedRepo.value, prId)
+      ])
+      
+      // Process threads
+      const prThreads: PRThread[] = threads?.map(thread => ({
+        id: thread.id!,
+        status: thread.status === 1 ? 'active' : thread.status === 2 ? 'fixed' : thread.status === 3 ? 'wontFix' : thread.status === 4 ? 'closed' : 'unknown',
+        isResolved: thread.status !== 1,
+        comments: thread.comments?.map(c => ({
+          author: c.author?.displayName || 'Unknown',
+          content: c.content || '',
+          date: c.publishedDate ? new Date(c.publishedDate).toLocaleDateString() : ''
+        })) || []
+      })).filter(t => t.comments.length > 0) || []
+      
+      // Process reviewers
+      const prReviewers: PRReviewer[] = reviewers?.map(r => ({
+        id: r.id || '',
+        displayName: r.displayName || 'Unknown',
+        vote: r.vote || 0,
+        isRequired: (r as any).isRequired || false,
+        imageUrl: r.imageUrl
+      })) || []
+      
+      // Process statuses
+      const prStatuses: PRStatus[] = statuses?.map(s => ({
+        id: s.id!,
+        state: s.state === 1 ? 'pending' : s.state === 2 ? 'succeeded' : s.state === 3 ? 'failed' : s.state === 4 ? 'error' : 'unknown',
+        description: s.description || '',
+        context: (s.context as any)?.name || s.context?.genre || 'Check',
+        targetUrl: s.targetUrl
+      })) || []
+      
+      // Process conflicts
+      const prConflicts: PRConflict[] = conflicts?.map(c => ({
+        conflictId: c.conflictId!,
+        conflictType: c.conflictType === 1 ? 'rename' : c.conflictType === 2 ? 'edit' : c.conflictType === 3 ? 'delete' : 'unknown',
+        conflictPath: (c as any).sourceFilePath || (c as any).targetFilePath || (c as any).conflictPath || 'Unknown path',
+        rawConflict: c // Store raw conflict for getting blob content later
+      })) || []
+      
+      set({ 
+        prIsDraft: prDetails?.isDraft || false,
+        prThreads,
+        prReviewers,
+        prStatuses,
+        prConflicts,
+        prDetailsLoading: false
+      })
+    } catch (error) {
+      console.error('Failed to load PR details:', error)
+      set({ prDetailsLoading: false })
+    }
+  },
+  loadPRFileChanges: async (prId: number) => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
+    
+    set({ prFileChangesLoading: true })
+    try {
+      // Get the PR details from description
+      const prDetails = JSON.parse(state.selectedPR.description)
+      const sourceBranch = prDetails.sourceBranch
+      const targetBranch = prDetails.targetBranch
+      
+      // Get iterations to find the latest one
+      const iterations = await getPullRequestIterations(
+        state.selectedProject.value, 
+        state.selectedRepo.value, 
+        prId
+      )
+      
+      if (!iterations || iterations.length === 0) {
+        set({ prFileChanges: [], prFileChangesLoading: false })
+        return
+      }
+      
+      // Get the latest iteration
+      const latestIteration = iterations[iterations.length - 1]
+      
+      // Get changes for the latest iteration
+      const changes = await getPullRequestIterationChanges(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        prId,
+        latestIteration.id!
+      )
+      
+      if (!changes?.changeEntries) {
+        set({ prFileChanges: [], prFileChangesLoading: false })
+        return
+      }
+      
+      // Get file contents for each change
+      const fileChanges: PRFileChange[] = []
+      for (const change of changes.changeEntries.slice(0, 10)) { // Limit to 10 files for performance
+        const path = change.item?.path
+        if (!path) continue
+        
+        const changeType = change.changeType === 1 ? 'add' : 
+                          change.changeType === 2 ? 'edit' : 
+                          change.changeType === 16 ? 'delete' : 'unknown'
+        
+        const diffResult = await getPullRequestFileDiff(
+          state.selectedProject.value,
+          state.selectedRepo.value,
+          prId,
+          path,
+          sourceBranch,
+          targetBranch
+        )
+        
+        fileChanges.push({
+          path,
+          changeType,
+          originalContent: diffResult?.originalContent || '',
+          modifiedContent: diffResult?.modifiedContent || ''
+        })
+      }
+      
+      set({ prFileChanges: fileChanges, prFileChangesLoading: false })
+    } catch (error) {
+      console.error('Failed to load PR file changes:', error)
+      set({ prFileChanges: [], prFileChangesLoading: false })
+    }
+  },
+  selectPRFile: (file: PRFileChange, index: number) => {
+    set({ selectedPRFile: file, selectedPRFileIndex: index })
+  },
+  navigatePRFile: (direction: 'up' | 'down') => {
+    const state = get()
+    if (state.prFileChanges.length === 0) return
+    
+    let newIndex = state.selectedPRFileIndex
+    if (direction === 'down') {
+      newIndex = Math.min(state.selectedPRFileIndex + 1, state.prFileChanges.length - 1)
+    } else {
+      newIndex = Math.max(state.selectedPRFileIndex - 1, 0)
+    }
+    
+    const file = state.prFileChanges[newIndex]
+    if (file) {
+      set({ selectedPRFile: file, selectedPRFileIndex: newIndex })
+    }
+  },
+  goBackFromPRFiles: () => {
+    set({ selectedPR: null, prFileChanges: [], selectedPRFile: null, selectedPRFileIndex: 0 })
+  },
+  
+  // PR Actions
+  prActionStatus: null,
+  prActionLoading: false,
+  isAddingComment: false,
+  commentText: '',
+  isCompletingPR: false,
+  completionMessage: '',
+  
+  openPRInBrowser: () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
+    
+    const url = getPullRequestUrl(
+      state.selectedProject.name,
+      state.selectedRepo.name,
+      parseInt(state.selectedPR.value)
+    )
+    
+    // Open URL in default browser
+    const { exec } = require('child_process')
+    const platform = process.platform
+    const command = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open'
+    exec(`${command} "${url}"`)
+    
+    set({ prActionStatus: { message: 'Opening PR in browser...', isError: false } })
+    setTimeout(() => set({ prActionStatus: null }), 2000)
+  },
+  
+  approvePR: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
+    
+    set({ prActionLoading: true, prActionStatus: { message: 'Approving PR...', isError: false } })
+    
+    try {
+      const result = await approvePullRequest(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        parseInt(state.selectedPR.value)
+      )
+      
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: result.message, isError: !result.success } 
+      })
+      
+      // Auto-clear success message
+      if (result.success) {
+        setTimeout(() => set({ prActionStatus: null }), 3000)
+      }
+    } catch (error) {
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isError: true } 
+      })
+    }
+  },
+  
+  startAddingComment: () => {
+    set({ isAddingComment: true, commentText: '' })
+  },
+  
+  cancelAddingComment: () => {
+    set({ isAddingComment: false, commentText: '' })
+  },
+  
+  setCommentText: (text: string) => {
+    set({ commentText: text })
+  },
+  
+  submitComment: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR || !state.commentText.trim()) return
+    
+    set({ prActionLoading: true, prActionStatus: { message: 'Adding comment...', isError: false } })
+    
+    try {
+      const result = await addPullRequestComment(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        parseInt(state.selectedPR.value),
+        state.commentText.trim()
+      )
+      
+      set({ 
+        prActionLoading: false, 
+        isAddingComment: false,
+        commentText: '',
+        prActionStatus: { message: result.message, isError: !result.success } 
+      })
+      
+      if (result.success) {
+        setTimeout(() => set({ prActionStatus: null }), 3000)
+      }
+    } catch (error) {
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isError: true } 
+      })
+    }
+  },
+  
+  startCompletingPR: () => {
+    const state = get()
+    // Pre-fill with PR title as default commit message
+    const defaultMessage = state.selectedPR?.name || 'Merge pull request'
+    set({ isCompletingPR: true, completionMessage: defaultMessage })
+  },
+  
+  cancelCompletingPR: () => {
+    set({ isCompletingPR: false, completionMessage: '' })
+  },
+  
+  setCompletionMessage: (message: string) => {
+    set({ completionMessage: message })
+  },
+  
+  submitCompletion: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR || !state.completionMessage.trim()) return
+    
+    set({ prActionLoading: true, prActionStatus: { message: 'Completing PR...', isError: false } })
+    
+    try {
+      const result = await completePullRequest(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        parseInt(state.selectedPR.value),
+        state.completionMessage.trim(),
+        false // deleteSourceBranch
+      )
+      
+      set({ 
+        prActionLoading: false, 
+        isCompletingPR: false,
+        completionMessage: '',
+        prActionStatus: { message: result.message, isError: !result.success } 
+      })
+      
+      if (result.success) {
+        // Refresh PRs list after completion
+        setTimeout(() => {
+          const currentState = get()
+          currentState.goBackFromPRFiles()
+          currentState.loadPullRequests()
+          set({ prActionStatus: null })
+        }, 2000)
+      }
+    } catch (error) {
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isError: true } 
+      })
+    }
+  },
+  
+  clearPRActionStatus: () => {
+    set({ prActionStatus: null })
+  },
+  
+  toggleDraft: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
+    
+    const newDraftStatus = !state.prIsDraft
+    set({ prActionLoading: true, prActionStatus: { message: newDraftStatus ? 'Marking as draft...' : 'Publishing PR...', isError: false } })
+    
+    try {
+      const result = await togglePullRequestDraft(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        parseInt(state.selectedPR.value),
+        newDraftStatus
+      )
+      
+      if (result.success) {
+        set({ prIsDraft: newDraftStatus })
+      }
+      
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: result.message, isError: !result.success } 
+      })
+      
+      if (result.success) {
+        setTimeout(() => set({ prActionStatus: null }), 3000)
+      }
+    } catch (error) {
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isError: true } 
+      })
+    }
+  },
+  
+  startAddingReviewer: async () => {
+    const state = get()
+    if (!state.selectedProject) return
+    
+    set({ isAddingReviewer: true, selectedReviewerIndex: 0, reviewerIsRequired: false })
+    
+    // Load team members
+    try {
+      const members = await getTeamMembers(state.selectedProject.value)
+      const teamMembers = members?.map(m => ({
+        id: (m.identity as any)?.id || '',
+        displayName: (m.identity as any)?.displayName || 'Unknown'
+      })).filter(m => m.id) || []
+      set({ teamMembers })
+    } catch (error) {
+      console.error('Failed to load team members:', error)
+      set({ teamMembers: [] })
+    }
+  },
+  
+  cancelAddingReviewer: () => {
+    set({ isAddingReviewer: false, teamMembers: [], selectedReviewerIndex: 0, reviewerIsRequired: false })
+  },
+  
+  navigateReviewer: (direction: 'up' | 'down') => {
+    const state = get()
+    if (state.teamMembers.length === 0) return
+    
+    let newIndex = state.selectedReviewerIndex
+    if (direction === 'down') {
+      newIndex = Math.min(state.selectedReviewerIndex + 1, state.teamMembers.length - 1)
+    } else {
+      newIndex = Math.max(state.selectedReviewerIndex - 1, 0)
+    }
+    set({ selectedReviewerIndex: newIndex })
+  },
+  
+  toggleReviewerRequired: () => {
+    const state = get()
+    set({ reviewerIsRequired: !state.reviewerIsRequired })
+  },
+  
+  submitReviewer: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR || state.teamMembers.length === 0) return
+    
+    const selectedMember = state.teamMembers[state.selectedReviewerIndex]
+    if (!selectedMember) return
+    
+    set({ prActionLoading: true, prActionStatus: { message: 'Adding reviewer...', isError: false } })
+    
+    try {
+      const result = await addPullRequestReviewer(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        parseInt(state.selectedPR.value),
+        selectedMember.id,
+        state.reviewerIsRequired
+      )
+      
+      set({ 
+        prActionLoading: false, 
+        isAddingReviewer: false,
+        teamMembers: [],
+        selectedReviewerIndex: 0,
+        reviewerIsRequired: false,
+        prActionStatus: { message: result.message, isError: !result.success } 
+      })
+      
+      if (result.success) {
+        // Refresh PR details
+        state.loadPRDetails(parseInt(state.selectedPR.value))
+        setTimeout(() => set({ prActionStatus: null }), 3000)
+      }
+    } catch (error) {
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isError: true } 
+      })
+    }
+  },
+  
+  removeReviewer: async (reviewerId: string) => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
+    
+    set({ prActionLoading: true, prActionStatus: { message: 'Removing reviewer...', isError: false } })
+    
+    try {
+      const result = await removePullRequestReviewer(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        parseInt(state.selectedPR.value),
+        reviewerId
+      )
+      
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: result.message, isError: !result.success } 
+      })
+      
+      if (result.success) {
+        // Refresh PR details
+        state.loadPRDetails(parseInt(state.selectedPR.value))
+        setTimeout(() => set({ prActionStatus: null }), 3000)
+      }
+    } catch (error) {
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isError: true } 
+      })
+    }
+  },
+  
+  selectConflict: async (index: number) => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.prConflicts[index]) return
+    
+    const conflict = state.prConflicts[index]
+    set({ 
+      selectedConflictIndex: index, 
+      conflictContentLoading: true,
+      selectedConflict: conflict
+    })
+    
+    try {
+      const details = await getConflictDetails(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        conflict.rawConflict
+      )
+      
+      if (details) {
+        const updatedConflict: PRConflict = {
+          ...conflict,
+          sourceContent: details.sourceContent,
+          targetContent: details.targetContent,
+          baseContent: details.baseContent
+        }
+        set({ 
+          selectedConflict: updatedConflict,
+          conflictContentLoading: false
+        })
+      } else {
+        set({ conflictContentLoading: false })
+      }
+    } catch (error) {
+      console.error('Failed to load conflict details:', error)
+      set({ conflictContentLoading: false })
+    }
+  },
+  
+  navigateConflict: (direction: 'up' | 'down') => {
+    const state = get()
+    if (state.prConflicts.length === 0) return
+    
+    let newIndex = state.selectedConflictIndex
+    if (direction === 'down') {
+      newIndex = Math.min(state.selectedConflictIndex + 1, state.prConflicts.length - 1)
+    } else {
+      newIndex = Math.max(state.selectedConflictIndex - 1, 0)
+    }
+    
+    if (newIndex !== state.selectedConflictIndex) {
+      set({ selectedConflictIndex: newIndex })
+      // Load the new conflict content
+      state.selectConflict(newIndex)
+    }
+  },
+  
+  exitConflictView: () => {
+    set({ 
+      selectedConflict: null, 
+      selectedConflictIndex: 0,
+      conflictContentLoading: false
+    })
   },
 }))

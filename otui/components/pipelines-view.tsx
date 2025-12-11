@@ -65,10 +65,6 @@ export function PipelinesView() {
             <text fg="#888888">Branch: {selectedPipelineRun.description}</text>
           </box>
         )}
-
-        <text fg="#888888">
-          Esc: Back to pipelines | Enter: Select run
-        </text>
       </box>
     )
   }
@@ -92,10 +88,6 @@ export function PipelinesView() {
           onSelect={handlePipelineSelect}
         />
       )}
-
-      <text fg="#888888">
-        Enter: View runs | Esc: Back to options
-      </text>
     </box>
   )
 }

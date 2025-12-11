@@ -9,7 +9,14 @@ export function Controls() {
     isInPRsView,
     cloneFocusedField, 
     isSearchActive,
-    selectedPipeline
+    selectedPipeline,
+    selectedPR,
+    selectedPRFile,
+    isAddingComment,
+    isCompletingPR,
+    isAddingReviewer,
+    selectedConflict,
+    prConflicts
   } = useAppStore()
 
   const getControlsText = () => {
@@ -33,6 +40,25 @@ export function Controls() {
     }
 
     if (isInPRsView && focusedBox === 'workspace') {
+      if (isAddingComment) {
+        return "Ctrl+Enter: Submit | Esc: Cancel"
+      }
+      if (isCompletingPR) {
+        return "Ctrl+Enter: Complete PR | Esc: Cancel"
+      }
+      if (isAddingReviewer) {
+        return "Enter: Add reviewer | R: Toggle required | j/k: Navigate | Esc: Cancel"
+      }
+      if (selectedConflict) {
+        return "j/k: Navigate conflicts | Esc: Back to PR"
+      }
+      if (selectedPRFile) {
+        return "j/k: Files | O: Open | A: Approve | C: Comment | M: Merge | D: Draft | R: Reviewer | Esc: Back"
+      }
+      if (selectedPR) {
+        const hasConflicts = prConflicts.length > 0
+        return `Enter: Diff | j/k: Nav | O: Open | A: Approve | C: Comment | M: Merge | D: Draft | R: Reviewer${hasConflicts ? ' | X: Conflicts' : ''}`
+      }
       return "Enter: Select PR | Esc: Back to options | Arrow Keys: Navigate"
     }
     

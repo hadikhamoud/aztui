@@ -111,7 +111,7 @@ export function WorkspaceBox() {
       title={getTitle()}
       padding={2}
       borderStyle="rounded"
-      width={width / 2}
+      flexGrow={1}
       height={height - 2}
       borderColor={isFocused ? "#007595" : "white"}
     >
