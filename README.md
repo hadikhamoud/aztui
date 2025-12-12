@@ -1,6 +1,6 @@
-Attempt at implementing a terminal user interface for Azure Devops VC, build pipelines, and Boards
+# AZTUI Rewrite using opentui
 
-Exploring opentui officially
+### Issues currently facing:
 
-- Currently working on the rewrite
-
+- assigning a select value to the select component. Works, not optimal 
+- working on tab across boxes and managing state within the same box (multiple views)
