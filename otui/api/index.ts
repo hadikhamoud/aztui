@@ -3,26 +3,123 @@ import * as coreA from "azure-devops-node-api/CoreApi";
 import * as gitA from "azure-devops-node-api/GitApi";
 import * as pipelineA from "azure-devops-node-api/PipelinesApi";
 import * as buildA from "azure-devops-node-api/BuildApi";
+import { execSync } from "child_process";
+import { getCredentials } from "../config";
 
-let orgUrl = Bun.env.AZURE_ORG_URL || "";
-let token: string = Bun.env.AZURE_PAT || "";
+// Initialize from environment or config
+let credentials = getCredentials();
+let orgUrl = credentials?.orgUrl || "";
+let token = credentials?.pat || "";
 
 let connection: azdev.WebApi | null = null;
 let coreApi: coreA.ICoreApi | null = null;
 let gitApi: gitA.GitApi | null = null;
 let buildApi: buildA.BuildApi | null = null;
 let pipelineApi: pipelineA.PipelinesApi | null = null;
+let connectionPromise: Promise<void> | null = null;
 
+// Reinitialize connection with new credentials
+export function reinitializeConnection(newOrgUrl: string, newPat: string): void {
+  orgUrl = newOrgUrl;
+  token = newPat;
+  connection = null;
+  coreApi = null;
+  gitApi = null;
+  buildApi = null;
+  pipelineApi = null;
+  connectionPromise = null;
+}
+
+// Extract org name from the configured org URL
+function getOrgName(): string {
+  // orgUrl format: https://dev.azure.com/{org}/ or https://{org}.visualstudio.com/
+  const match = orgUrl.match(/dev\.azure\.com\/([^\/]+)/) || orgUrl.match(/([^\/]+)\.visualstudio\.com/);
+  return match ? match[1] : '';
+}
+
+export interface DetectedRepo {
+  org: string;
+  project: string;
+  repoName: string;
+}
+
+// Detect if current directory is inside an Azure DevOps git repo
+export function detectCurrentRepo(): DetectedRepo | null {
+  try {
+    // Check if we're in a git repo
+    execSync('git rev-parse --git-dir', { stdio: 'pipe' });
+    
+    // Get the remote URL (try origin first)
+    let remoteUrl: string;
+    try {
+      remoteUrl = execSync('git remote get-url origin', { stdio: 'pipe' }).toString().trim();
+    } catch {
+      // Try to get any remote
+      const remotes = execSync('git remote', { stdio: 'pipe' }).toString().trim().split('\n');
+      if (remotes.length === 0 || !remotes[0]) return null;
+      remoteUrl = execSync(`git remote get-url ${remotes[0]}`, { stdio: 'pipe' }).toString().trim();
+    }
+    
+    // Parse Azure DevOps URL formats:
+    // HTTPS: https://dev.azure.com/{org}/{project}/_git/{repo}
+    // HTTPS alt: https://{org}.visualstudio.com/{project}/_git/{repo}
+    // SSH: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+    
+    let match: RegExpMatchArray | null = null;
+    
+    // Try HTTPS format: https://dev.azure.com/{org}/{project}/_git/{repo}
+    match = remoteUrl.match(/dev\.azure\.com\/([^\/]+)\/([^\/]+)\/_git\/([^\/\s]+)/);
+    if (match) {
+      return { org: match[1], project: match[2], repoName: match[3].replace(/\.git$/, '') };
+    }
+    
+    // Try visualstudio.com format: https://{org}.visualstudio.com/{project}/_git/{repo}
+    match = remoteUrl.match(/([^\/]+)\.visualstudio\.com\/([^\/]+)\/_git\/([^\/\s]+)/);
+    if (match) {
+      return { org: match[1], project: match[2], repoName: match[3].replace(/\.git$/, '') };
+    }
+    
+    // Try SSH format: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+    match = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^\/]+)\/([^\/]+)\/([^\/\s]+)/);
+    if (match) {
+      return { org: match[1], project: match[2], repoName: match[3].replace(/\.git$/, '') };
+    }
+    
+    return null;
+  } catch {
+    // Not in a git repo or git not available
+    return null;
+  }
+}
+
+// Check if detected repo belongs to our configured org
+export function isRepoInConfiguredOrg(detected: DetectedRepo): boolean {
+  const configuredOrg = getOrgName().toLowerCase();
+  return detected.org.toLowerCase() === configuredOrg;
+}
 
 async function initializeConnection() {
+  // Return existing connection
   if (connection) return;
+  
+  // Return existing pending connection promise (prevent concurrent initialization)
+  if (connectionPromise) return connectionPromise;
+  
+  if (!orgUrl || !token) {
+    throw new Error(`Missing credentials: orgUrl=${orgUrl ? 'SET' : 'EMPTY'}, token=${token ? 'SET' : 'EMPTY'}`);
+  }
 
-  let authHandler = azdev.getPersonalAccessTokenHandler(token);
-  connection = new azdev.WebApi(orgUrl, authHandler);
-  coreApi = await connection.getCoreApi();
-  gitApi = await connection.getGitApi();
-  buildApi = await connection.getBuildApi();
-  pipelineApi = await connection.getPipelinesApi();
+  // Create and store the connection promise
+  connectionPromise = (async () => {
+    let authHandler = azdev.getPersonalAccessTokenHandler(token);
+    connection = new azdev.WebApi(orgUrl, authHandler);
+    coreApi = await connection.getCoreApi();
+    gitApi = await connection.getGitApi();
+    buildApi = await connection.getBuildApi();
+    pipelineApi = await connection.getPipelinesApi();
+  })();
+  
+  return connectionPromise;
 }
 
 export async function getProjects() {
@@ -77,13 +174,99 @@ export async function getPipelineRuns(projectId: string, pipelineId: number) {
   return runs;
 }
 
-export async function getBuildTimeline(projectId: string, buildId: number) {
+export interface BuildStepIssue {
+  type: 'error' | 'warning'
+  message: string
+  category?: string
+}
+
+export interface BuildStep {
+  id: string
+  name: string
+  type: string // 'Stage' | 'Job' | 'Task'
+  state: 'pending' | 'inProgress' | 'completed'
+  result: 'succeeded' | 'failed' | 'canceled' | 'skipped' | 'unknown' | null
+  startTime?: Date
+  finishTime?: Date
+  parentId?: string
+  order: number
+  percentComplete?: number
+  errorCount?: number
+  warningCount?: number
+  currentOperation?: string  // What's currently happening (for in-progress steps)
+  issues?: BuildStepIssue[] // Errors and warnings with messages
+  logUrl?: string           // URL to fetch detailed logs
+  logId?: number            // Log ID for fetching log content
+}
+
+export async function getBuildTimeline(projectId: string, buildId: number): Promise<BuildStep[]> {
   await initializeConnection();
-  if (!buildApi) throw new Error("Failed to initialize git API");
+  if (!buildApi) throw new Error("Failed to initialize build API");
 
   const timeline = await buildApi.getBuildTimeline(projectId, buildId);
+  
+  if (!timeline?.records) return [];
+  
+  // Map timeline records to our BuildStep interface
+  const steps: BuildStep[] = timeline.records
+    .filter(record => record.type === 'Stage' || record.type === 'Job' || record.type === 'Task')
+    .map(record => {
+      // State: 0 = pending, 1 = inProgress, 2 = completed
+      let state: 'pending' | 'inProgress' | 'completed' = 'pending';
+      if (record.state === 1) state = 'inProgress';
+      else if (record.state === 2) state = 'completed';
+      
+      // Result: 0 = succeeded, 2 = failed, 3 = canceled, 4 = skipped
+      let result: 'succeeded' | 'failed' | 'canceled' | 'skipped' | 'unknown' | null = null;
+      if (record.result === 0) result = 'succeeded';
+      else if (record.result === 2) result = 'failed';
+      else if (record.result === 3) result = 'canceled';
+      else if (record.result === 4) result = 'skipped';
+      else if (record.result !== undefined && record.result !== null) result = 'unknown';
+      
+      // Parse issues (errors and warnings)
+      const issues: BuildStepIssue[] = (record.issues || []).map((issue: any) => ({
+        type: issue.type === 1 ? 'error' : 'warning',
+        message: issue.message || '',
+        category: issue.category
+      }));
+      
+      return {
+        id: record.id || '',
+        name: record.name || 'Unknown',
+        type: record.type || 'Task',
+        state,
+        result,
+        startTime: record.startTime ? new Date(record.startTime) : undefined,
+        finishTime: record.finishTime ? new Date(record.finishTime) : undefined,
+        parentId: record.parentId,
+        order: record.order || 0,
+        percentComplete: record.percentComplete,
+        errorCount: record.errorCount,
+        warningCount: record.warningCount,
+        currentOperation: (record as any).currentOperation,
+        issues: issues.length > 0 ? issues : undefined,
+        logUrl: record.log?.url,
+        logId: record.log?.id
+      };
+    })
+    .sort((a, b) => a.order - b.order);
+  
+  return steps;
+}
 
-  return timeline;
+// Fetch build log content for a specific step
+export async function getBuildStepLogs(projectId: string, buildId: number, logId: number): Promise<string[]> {
+  await initializeConnection();
+  if (!buildApi) throw new Error("Failed to initialize build API");
+
+  try {
+    const logLines = await buildApi.getBuildLogLines(projectId, buildId, logId);
+    return logLines || [];
+  } catch (error) {
+    console.error('Failed to fetch build logs:', error);
+    return [];
+  }
 }
 
 export async function getPullRequests(projectId: string, repositoryId: string) {
@@ -131,7 +314,8 @@ export async function getBuildRuns(projectId: string, definitionId: number) {
   await initializeConnection();
   if (!buildApi) throw new Error("Failed to initialize build API");
 
-  const builds = await buildApi.getBuilds(
+  // Get in-progress/queued builds first (status: 1=InProgress, 32=NotStarted, 4=Cancelling)
+  const inProgressBuilds = await buildApi.getBuilds(
     projectId,
     [definitionId], // definitions
     undefined, // queues
@@ -140,18 +324,46 @@ export async function getBuildRuns(projectId: string, definitionId: number) {
     undefined, // maxTime
     undefined, // requestedFor
     undefined, // reasonFilter
-    undefined, // statusFilter
+    1 | 4 | 32, // statusFilter - InProgress, Cancelling, NotStarted
     undefined, // resultFilter
     undefined, // tagFilters
     undefined, // properties
-    10 // top - get last 10 builds
+    10 // top
   );
 
-  builds?.forEach(build => {
-    console.log(`Build: ${build.buildNumber} - ${build.status} - ${build.result}`);
+  // Get completed builds
+  const completedBuilds = await buildApi.getBuilds(
+    projectId,
+    [definitionId], // definitions
+    undefined, // queues
+    undefined, // buildNumber
+    undefined, // minTime
+    undefined, // maxTime
+    undefined, // requestedFor
+    undefined, // reasonFilter
+    2, // statusFilter - Completed only
+    undefined, // resultFilter
+    undefined, // tagFilters
+    undefined, // properties
+    10 // top
+  );
+
+  // Merge: in-progress first, then completed (sorted by queueTime descending)
+  const allBuilds = [
+    ...(inProgressBuilds || []),
+    ...(completedBuilds || [])
+  ].sort((a, b) => {
+    // Sort by queueTime descending (most recent first)
+    const aTime = a.queueTime ? new Date(a.queueTime).getTime() : 0;
+    const bTime = b.queueTime ? new Date(b.queueTime).getTime() : 0;
+    return bTime - aTime;
+  }).slice(0, 10); // Keep top 10
+
+  allBuilds.forEach(build => {
+    console.log(`Build: ${build.buildNumber} - status:${build.status} - result:${build.result} - queueTime:${build.queueTime}`);
   });
 
-  return builds;
+  return allBuilds;
 }
 
 export async function getPullRequestIterations(projectId: string, repositoryId: string, pullRequestId: number) {

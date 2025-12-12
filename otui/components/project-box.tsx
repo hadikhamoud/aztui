@@ -24,8 +24,13 @@ export function ProjectBox() {
   const displayOptions = isSearchTarget ? getFilteredOptions('projects') : projects
 
   useEffect(() => {
-    loadProjects()
-  }, [loadProjects])
+    // Only load if projects aren't already loaded and we're not initializing from cwd
+    // The isInitializingFromCwd check prevents race condition with auto-detect
+    const state = useAppStore.getState()
+    if (projects.length === 0 && !state.isInitializingFromCwd) {
+      loadProjects()
+    }
+  }, [loadProjects, projects.length])
 
   const handleChange = (value: string) => {
     // Track selection as we navigate with arrow keys

@@ -1,23 +1,75 @@
 import { createCliRenderer } from "@opentui/core"
 import { useKeyboard, createRoot } from "@opentui/react"
 import { useTerminalDimensions } from "@opentui/react"
+import { useEffect, useState, useRef } from "react"
 import { useAppStore } from "./store/app-store"
 import { ProjectBox } from "./components/project-box"
 import { RepoBox } from "./components/repo-box"
 import { WorkspaceBox } from "./components/workspace-box"
 import { Controls } from "./components/controls"
 import { SearchBar } from "./components/search-bar"
+import { SetupView } from "./components/setup-view"
 
 function App() {
   const { width, height } = useTerminalDimensions()
   // Subscribe to trigger re-renders, but use getState() in keyboard handler for fresh values
-  useAppStore()
+  const { needsSetup } = useAppStore()
+  
+  // Handle initialization after setup completes
+  // The initial auto-detect is handled in the store module itself at load time
+  // This effect handles the case when setup completes (needsSetup goes from true to false)
+  const prevNeedsSetupRef = useRef(needsSetup)
+  useEffect(() => {
+    if (prevNeedsSetupRef.current && !needsSetup) {
+      // Setup just completed, run initializeFromCwd
+      useAppStore.getState().initializeFromCwd()
+    }
+    prevNeedsSetupRef.current = needsSetup
+  }, [needsSetup])
 
 
 
   useKeyboard((key) => {
     // Get fresh state from store to avoid stale closures
     const state = useAppStore.getState()
+    
+    // Handle setup mode
+    if (state.needsSetup) {
+      if (key.name === "tab") {
+        state.toggleSetupField()
+        return
+      }
+      
+      if (key.name === "return") {
+        state.submitSetup()
+        return
+      }
+      
+      if (key.name === "backspace") {
+        if (state.setupFocusedField === 'orgUrl') {
+          state.setSetupOrgUrl(state.setupOrgUrl.slice(0, -1))
+        } else {
+          state.setSetupPat(state.setupPat.slice(0, -1))
+        }
+        return
+      }
+      
+      // Handle typed characters and pasted text (sequence can be multiple characters on paste)
+      if (key.sequence && !key.ctrl && !key.meta && key.name !== 'escape') {
+        // Filter out control characters but allow printable characters
+        const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+        if (printable.length > 0) {
+          if (state.setupFocusedField === 'orgUrl') {
+            state.setSetupOrgUrl(state.setupOrgUrl + printable)
+          } else {
+            state.setSetupPat(state.setupPat + printable)
+          }
+          return
+        }
+      }
+      
+      return
+    }
     
     if (state.isSearchActive) {
       if (key.name === "escape") {
@@ -98,6 +150,57 @@ function App() {
 
     // Handle Pipelines View keyboard input
     if (state.isInPipelinesView && state.focusedBox === 'workspace') {
+      // If viewing step logs
+      if (state.selectedStep) {
+        if (key.name === "escape") {
+          state.exitStepLogs()
+          return
+        }
+        if (key.name === "j" || key.name === "down") {
+          state.scrollLogs('down')
+          return
+        }
+        if (key.name === "k" || key.name === "up") {
+          state.scrollLogs('up')
+          return
+        }
+        if (key.name === "pagedown" || (key.name === "d" && key.ctrl)) {
+          state.scrollLogs('pagedown')
+          return
+        }
+        if (key.name === "pageup" || (key.name === "u" && key.ctrl)) {
+          state.scrollLogs('pageup')
+          return
+        }
+        return
+      }
+      
+      // If viewing steps (run selected)
+      if (state.selectedPipelineRun) {
+        if (key.name === "escape") {
+          state.goBackFromSteps()
+          return
+        }
+        if (key.name === "j" || key.name === "down") {
+          state.navigateStep('down')
+          return
+        }
+        if (key.name === "k" || key.name === "up") {
+          state.navigateStep('up')
+          return
+        }
+        if (key.name === "return") {
+          // Select the current step to view logs
+          const tasks = state.pipelineSteps.filter(s => s.type === 'Task')
+          const step = tasks[state.selectedStepIndex]
+          if (step) {
+            state.selectStep(step, state.selectedStepIndex)
+          }
+          return
+        }
+        return
+      }
+      
       if (key.name === "escape") {
         if (state.selectedPipeline) {
           // Go back from runs to pipeline list
@@ -300,6 +403,15 @@ function App() {
       }
     }
   })
+
+  // Show setup view if credentials are missing
+  if (needsSetup) {
+    return (
+      <box width={width} height={height} flexDirection="column">
+        <SetupView />
+      </box>
+    )
+  }
 
   return (
     <box width={width} height={height} flexDirection="column">

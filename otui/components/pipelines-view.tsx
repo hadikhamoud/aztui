@@ -1,6 +1,103 @@
 import { useAppStore } from "../store/app-store"
 import { Select } from "./select"
 import { TextAttributes } from "@opentui/core"
+import type { BuildStep } from "../api"
+
+// Get status icon and color for a step
+function getStepStatusDisplay(step: BuildStep): { icon: string; color: string } {
+  if (step.state === 'inProgress') {
+    return { icon: '⟳', color: '#FFD700' } // Yellow for in progress
+  }
+  
+  if (step.state === 'pending') {
+    return { icon: '○', color: '#888888' } // Gray for pending
+  }
+  
+  // Completed - check result
+  switch (step.result) {
+    case 'succeeded':
+      return { icon: '✓', color: '#00FF00' } // Green
+    case 'failed':
+      return { icon: '✗', color: '#FF4444' } // Red
+    case 'canceled':
+      return { icon: '⊘', color: '#FFA500' } // Orange
+    case 'skipped':
+      return { icon: '⊖', color: '#888888' } // Gray
+    default:
+      return { icon: '?', color: '#888888' }
+  }
+}
+
+// Format duration
+function formatDuration(start?: Date, finish?: Date): string {
+  if (!start) return ''
+  const end = finish || new Date()
+  const ms = end.getTime() - start.getTime()
+  const seconds = Math.floor(ms / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  
+  if (minutes > 0) {
+    return `${minutes}m ${remainingSeconds}s`
+  }
+  return `${seconds}s`
+}
+
+function StepRow({ step, indent = 0, showDetails = false, isSelected = false }: { step: BuildStep; indent?: number; showDetails?: boolean; isSelected?: boolean }) {
+  const { icon, color } = getStepStatusDisplay(step)
+  const duration = formatDuration(step.startTime, step.finishTime)
+  const indentStr = '  '.repeat(indent)
+  
+  // Show percentage for in-progress steps
+  const progress = step.state === 'inProgress' && step.percentComplete !== undefined
+    ? ` (${step.percentComplete}%)`
+    : ''
+  
+  // Show error/warning counts if any
+  const issueCounts = []
+  if (step.errorCount && step.errorCount > 0) issueCounts.push(`${step.errorCount} errors`)
+  if (step.warningCount && step.warningCount > 0) issueCounts.push(`${step.warningCount} warnings`)
+  const issueCountStr = issueCounts.length > 0 ? ` [${issueCounts.join(', ')}]` : ''
+  
+  // Selection indicator
+  const selectionIndicator = isSelected ? '▶ ' : '  '
+  const textColor = step.state === 'inProgress' ? '#FFD700' : isSelected ? '#00BFFF' : undefined
+  
+  return (
+    <box flexDirection="column">
+      <box flexDirection="row" gap={1}>
+        <text fg={color}>{indentStr}{selectionIndicator}{icon}</text>
+        <text fg={textColor}>
+          {step.name}{progress}
+        </text>
+        {duration && <text fg="#888888">({duration})</text>}
+        {issueCountStr && <text fg={step.errorCount ? '#FF4444' : '#FFA500'}>{issueCountStr}</text>}
+      </box>
+      
+      {/* Show current operation for in-progress steps */}
+      {step.state === 'inProgress' && step.currentOperation && (
+        <text fg="#888888">{indentStr}      ↳ {step.currentOperation}</text>
+      )}
+      
+      {/* Show issue messages (errors/warnings) when showDetails is true */}
+      {showDetails && step.issues && step.issues.length > 0 && (
+        <box flexDirection="column">
+          {step.issues.slice(0, 5).map((issue, idx) => (
+            <text 
+              key={idx} 
+              fg={issue.type === 'error' ? '#FF4444' : '#FFA500'}
+            >
+              {indentStr}      {issue.type === 'error' ? '✗' : '⚠'} {issue.message.slice(0, 100)}{issue.message.length > 100 ? '...' : ''}
+            </text>
+          ))}
+          {step.issues.length > 5 && (
+            <text fg="#888888">{indentStr}      ... and {step.issues.length - 5} more</text>
+          )}
+        </box>
+      )}
+    </box>
+  )
+}
 
 export function PipelinesView() {
   const {
@@ -11,9 +108,18 @@ export function PipelinesView() {
     selectedPipelineRun,
     pipelinesLoading,
     pipelineRunsLoading,
+    pipelineSteps,
+    pipelineStepsLoading,
+    isRunInProgress,
     selectPipeline,
     selectPipelineRun,
-    focusedBox
+    focusedBox,
+    // Step logs
+    selectedStep,
+    selectedStepIndex,
+    stepLogs,
+    stepLogsLoading,
+    stepLogsScrollOffset
   } = useAppStore()
 
   const isFocused = focusedBox === 'workspace'
@@ -34,6 +140,157 @@ export function PipelinesView() {
     }
   }
 
+  // Show step logs if a step is selected
+  if (selectedStep) {
+    const { icon, color } = getStepStatusDisplay(selectedStep)
+    const duration = formatDuration(selectedStep.startTime, selectedStep.finishTime)
+    const visibleLogs = stepLogs.slice(stepLogsScrollOffset, stepLogsScrollOffset + 30)
+    
+    return (
+      <box flexDirection="column" gap={1}>
+        <box flexDirection="row" gap={2}>
+          <text fg={color}>{icon}</text>
+          <text attributes={TextAttributes.BOLD}>{selectedStep.name}</text>
+          {duration && <text fg="#888888">({duration})</text>}
+          {selectedStep.state === 'inProgress' && (
+            <text fg="#FFD700">[IN PROGRESS]</text>
+          )}
+        </box>
+        
+        {stepLogsLoading ? (
+          <text fg="#888888">Loading logs...</text>
+        ) : stepLogs.length === 0 ? (
+          <text fg="#888888">No logs available</text>
+        ) : (
+          <box flexDirection="column">
+            <text fg="#888888">
+              Lines {stepLogsScrollOffset + 1}-{Math.min(stepLogsScrollOffset + 30, stepLogs.length)} of {stepLogs.length} (j/k to scroll, Esc to go back)
+            </text>
+            <box flexDirection="column" marginTop={1}>
+              {visibleLogs.map((line, idx) => {
+                const lineNum = stepLogsScrollOffset + idx + 1
+                // Color error lines red, warning lines yellow
+                const isError = line.toLowerCase().includes('error') || line.includes('##[error]')
+                const isWarning = line.toLowerCase().includes('warning') || line.includes('##[warning]')
+                const lineColor = isError ? '#FF4444' : isWarning ? '#FFA500' : undefined
+                // Clean up Azure DevOps formatting tags
+                const cleanLine = line.replace(/##\[(error|warning|section|command|debug)\]/g, '')
+                return (
+                  <text key={idx} fg={lineColor}>
+                    <text fg="#666666">{String(lineNum).padStart(4, ' ')} </text>
+                    {cleanLine}
+                  </text>
+                )
+              })}
+            </box>
+          </box>
+        )}
+      </box>
+    )
+  }
+
+  // Show steps if a run is selected
+  if (selectedPipelineRun) {
+    // Organize steps by hierarchy (Stage -> Job -> Task)
+    const stages = pipelineSteps.filter(s => s.type === 'Stage')
+    const jobs = pipelineSteps.filter(s => s.type === 'Job')
+    const tasks = pipelineSteps.filter(s => s.type === 'Task')
+    
+    return (
+      <box flexDirection="column" gap={1}>
+        <box flexDirection="row" gap={2}>
+          <text attributes={TextAttributes.BOLD}>
+            Build: {selectedPipelineRun.name.replace(/^\[(ok|fail|run|queue|warn|cancel)\]\s*/, '')}
+          </text>
+          {isRunInProgress && (
+            <text fg="#FFD700" attributes={TextAttributes.BOLD}>
+              [RUNNING]
+            </text>
+          )}
+        </box>
+        <text fg="#888888">Branch: {selectedPipelineRun.description}</text>
+        <text fg="#888888">Press Enter on a task to view logs, j/k to navigate</text>
+        
+        {pipelineStepsLoading && pipelineSteps.length === 0 ? (
+          <text fg="#888888">Loading steps...</text>
+        ) : pipelineSteps.length === 0 ? (
+          <text fg="#888888">No steps found</text>
+        ) : (
+          <box flexDirection="column" marginTop={1}>
+            <text fg="#888888" attributes={TextAttributes.UNDERLINE}>Build Steps:</text>
+            <box flexDirection="column" marginTop={0}>
+              {(() => {
+                // Track task index across all rendering paths
+                let taskIndex = 0;
+                
+                if (stages.length > 0) {
+                  // Show hierarchical view with stages
+                  return stages.map(stage => {
+                    const stageJobs = jobs.filter(j => j.parentId === stage.id)
+                    const showStageDetails = stage.result === 'failed' || stage.state === 'inProgress'
+                    return (
+                      <box key={stage.id} flexDirection="column">
+                        <StepRow step={stage} indent={0} showDetails={showStageDetails} />
+                        {stageJobs.map(job => {
+                          const jobTasks = tasks.filter(t => t.parentId === job.id)
+                          const showJobDetails = job.result === 'failed' || job.state === 'inProgress'
+                          return (
+                            <box key={job.id} flexDirection="column">
+                              <StepRow step={job} indent={1} showDetails={showJobDetails} />
+                              {jobTasks.map(task => {
+                                const currentTaskIndex = taskIndex++
+                                const showTaskDetails = task.result === 'failed' || task.state === 'inProgress'
+                                const isSelected = currentTaskIndex === selectedStepIndex
+                                return (
+                                  <StepRow key={task.id} step={task} indent={2} showDetails={showTaskDetails} isSelected={isSelected} />
+                                )
+                              })}
+                            </box>
+                          )
+                        })}
+                      </box>
+                    )
+                  })
+                } else if (jobs.length > 0) {
+                  // No stages, show jobs with their tasks
+                  return jobs.map(job => {
+                    const jobTasks = tasks.filter(t => t.parentId === job.id)
+                    const showJobDetails = job.result === 'failed' || job.state === 'inProgress'
+                    return (
+                      <box key={job.id} flexDirection="column">
+                        <StepRow step={job} indent={0} showDetails={showJobDetails} />
+                        {jobTasks.map(task => {
+                          const currentTaskIndex = taskIndex++
+                          const showTaskDetails = task.result === 'failed' || task.state === 'inProgress'
+                          const isSelected = currentTaskIndex === selectedStepIndex
+                          return (
+                            <StepRow key={task.id} step={task} indent={1} showDetails={showTaskDetails} isSelected={isSelected} />
+                          )
+                        })}
+                      </box>
+                    )
+                  })
+                } else {
+                  // Just tasks
+                  return tasks.map((task, idx) => {
+                    const showTaskDetails = task.result === 'failed' || task.state === 'inProgress'
+                    const isSelected = idx === selectedStepIndex
+                    return (
+                      <StepRow key={task.id} step={task} indent={0} showDetails={showTaskDetails} isSelected={isSelected} />
+                    )
+                  })
+                }
+              })()}
+            </box>
+            {isRunInProgress && (
+              <text fg="#888888" marginTop={1}>Auto-refreshing every 3s...</text>
+            )}
+          </box>
+        )}
+      </box>
+    )
+  }
+
   // Show pipeline runs if a pipeline is selected
   if (selectedPipeline) {
     return (
@@ -48,21 +305,12 @@ export function PipelinesView() {
           <text fg="#888888">No runs found for this pipeline</text>
         ) : (
           <box flexDirection="column">
-            <text fg="#888888">Recent Runs:</text>
+            <text fg="#888888">Recent Runs (Enter to view steps):</text>
             <Select 
               options={pipelineRuns} 
-              focused={isFocused} 
-              value={selectedPipelineRun?.value}
+              focused={isFocused}
               onSelect={handleRunSelect}
             />
-          </box>
-        )}
-
-        {selectedPipelineRun && (
-          <box flexDirection="column" gap={0} marginTop={1}>
-            <text attributes={TextAttributes.BOLD}>Run Details:</text>
-            <text>Build: {selectedPipelineRun.name}</text>
-            <text fg="#888888">Branch: {selectedPipelineRun.description}</text>
           </box>
         )}
       </box>

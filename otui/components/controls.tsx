@@ -10,6 +10,8 @@ export function Controls() {
     cloneFocusedField, 
     isSearchActive,
     selectedPipeline,
+    selectedPipelineRun,
+    selectedStep,
     selectedPR,
     selectedPRFile,
     isAddingComment,
@@ -33,8 +35,14 @@ export function Controls() {
     }
 
     if (isInPipelinesView && focusedBox === 'workspace') {
+      if (selectedStep) {
+        return "j/k: Scroll logs | Ctrl+d/u: Page down/up | Esc: Back to steps"
+      }
+      if (selectedPipelineRun) {
+        return "j/k: Navigate steps | Enter: View logs | Esc: Back to runs"
+      }
       if (selectedPipeline) {
-        return "Enter: Select run | Esc: Back to pipelines | Arrow Keys: Navigate"
+        return "Enter: View steps | Esc: Back to pipelines | Arrow Keys: Navigate"
       }
       return "Enter: View runs | Esc: Back to options | Arrow Keys: Navigate"
     }

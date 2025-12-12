@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { SelectOption } from '@opentui/core'
-import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails } from '../api'
+import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, type BuildStep, type DetectedRepo } from '../api'
+import { hasCredentials, saveConfig, getCredentials } from '../config'
 
 export interface PRFileChange {
   path: string
@@ -45,6 +46,20 @@ export interface PRConflict {
 type FocusedBox = 'projects' | 'repos' | 'workspace'
 
 interface AppStore {
+  // Setup state (shown when credentials are missing)
+  needsSetup: boolean
+  setupOrgUrl: string
+  setupPat: string
+  setupFocusedField: 'orgUrl' | 'pat'
+  setupError: string | null
+  setupSaving: boolean
+  checkCredentials: () => void
+  setSetupOrgUrl: (url: string) => void
+  setSetupPat: (pat: string) => void
+  setSetupFocusedField: (field: 'orgUrl' | 'pat') => void
+  toggleSetupField: () => void
+  submitSetup: () => Promise<void>
+
   focusedBox: FocusedBox
   setFocusedBox: (box: FocusedBox) => void
   cycleFocus: () => void
@@ -64,6 +79,11 @@ interface AppStore {
   setRepos: (repos: SelectOption[]) => void
   selectRepo: (repo: SelectOption, index: number) => void
   loadRepos: (projectId: string) => Promise<void>
+
+  // Auto-detect from cwd
+  detectedRepo: DetectedRepo | null
+  isInitializingFromCwd: boolean
+  initializeFromCwd: () => Promise<void>
 
   workspaceOptions: SelectOption[]
   selectedWorkspaceOption: SelectOption | null
@@ -115,13 +135,33 @@ interface AppStore {
   selectedPipelineRun: SelectOption | null
   pipelinesLoading: boolean
   pipelineRunsLoading: boolean
+  pipelineSteps: BuildStep[]
+  pipelineStepsLoading: boolean
+  pipelineStepsRefreshInterval: ReturnType<typeof setInterval> | null
+  isRunInProgress: boolean
+  // Step logs
+  selectedStepIndex: number
+  selectedStep: BuildStep | null
+  stepLogs: string[]
+  stepLogsLoading: boolean
+  stepLogsScrollOffset: number
   enterPipelinesView: () => void
   exitPipelinesView: () => void
   loadPipelines: () => Promise<void>
   selectPipeline: (pipeline: SelectOption) => void
   loadPipelineRuns: (pipelineId: number) => Promise<void>
   selectPipelineRun: (run: SelectOption) => void
+  loadPipelineSteps: (buildId: number) => Promise<void>
+  startStepsRefresh: (buildId: number) => void
+  stopStepsRefresh: () => void
   goBackFromRuns: () => void
+  goBackFromSteps: () => void
+  // Step navigation and logs
+  navigateStep: (direction: 'up' | 'down') => void
+  selectStep: (step: BuildStep, index: number) => void
+  loadStepLogs: (step: BuildStep) => Promise<void>
+  scrollLogs: (direction: 'up' | 'down' | 'pageup' | 'pagedown') => void
+  exitStepLogs: () => void
 
   // Pull Requests functionality
   isInPRsView: boolean
@@ -193,6 +233,87 @@ interface AppStore {
 const focusOrder: FocusedBox[] = ['projects', 'repos', 'workspace']
 
 export const useAppStore = create<AppStore>((set, get) => ({
+  // Setup state
+  needsSetup: !hasCredentials(),
+  setupOrgUrl: '',
+  setupPat: '',
+  setupFocusedField: 'orgUrl',
+  setupError: null,
+  setupSaving: false,
+  checkCredentials: () => {
+    set({ needsSetup: !hasCredentials() })
+  },
+  setSetupOrgUrl: (url: string) => {
+    set({ setupOrgUrl: url, setupError: null })
+  },
+  setSetupPat: (pat: string) => {
+    set({ setupPat: pat, setupError: null })
+  },
+  setSetupFocusedField: (field: 'orgUrl' | 'pat') => {
+    set({ setupFocusedField: field })
+  },
+  toggleSetupField: () => {
+    const state = get()
+    set({ setupFocusedField: state.setupFocusedField === 'orgUrl' ? 'pat' : 'orgUrl' })
+  },
+  submitSetup: async () => {
+    const state = get()
+    const { setupOrgUrl, setupPat } = state
+    
+    // Validate
+    if (!setupOrgUrl.trim()) {
+      set({ setupError: 'Organization URL is required' })
+      return
+    }
+    if (!setupPat.trim()) {
+      set({ setupError: 'Personal Access Token is required' })
+      return
+    }
+    
+    // Validate URL format
+    if (!setupOrgUrl.includes('dev.azure.com') && !setupOrgUrl.includes('visualstudio.com')) {
+      set({ setupError: 'Invalid URL. Should be https://dev.azure.com/org or https://org.visualstudio.com' })
+      return
+    }
+    
+    set({ setupSaving: true, setupError: null })
+    
+    try {
+      // Save to config
+      const saved = saveConfig({ orgUrl: setupOrgUrl.trim(), pat: setupPat.trim() })
+      if (!saved) {
+        set({ setupError: 'Failed to save configuration', setupSaving: false })
+        return
+      }
+      
+      // Reinitialize the API connection
+      reinitializeConnection(setupOrgUrl.trim(), setupPat.trim())
+      
+      // Test the connection by loading projects
+      const projects = await getProjects()
+      if (!projects || projects.length === 0) {
+        set({ setupError: 'Connected but no projects found. Check your permissions.', setupSaving: false })
+        return
+      }
+      
+      // Success! Clear setup state and proceed
+      // Note: initializeFromCwd will be called by the useEffect in App when needsSetup becomes false
+      set({ 
+        needsSetup: false, 
+        setupSaving: false,
+        setupOrgUrl: '',
+        setupPat: '',
+        setupError: null
+      })
+      
+    } catch (error) {
+      set({ 
+        setupError: `Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        setupSaving: false 
+      })
+    }
+  },
+
   focusedBox: 'projects',
   setFocusedBox: (box: FocusedBox) => {
     const state = get()
@@ -229,6 +350,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })
   },
   loadProjects: async () => {
+    // Skip if we're initializing from CWD (it will load projects itself)
+    const isInitializing = get().isInitializingFromCwd
+    if (isInitializing) {
+      return
+    }
+    
     try {
       const projects = await getProjects()
       const options = projects?.map(p => ({
@@ -265,6 +392,95 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ repos: options })
     } catch (error) {
       console.error('Failed to load repos:', error)
+    }
+  },
+
+  // Auto-detect from cwd
+  detectedRepo: null,
+  isInitializingFromCwd: false,
+  initializeFromCwd: async () => {
+    // Set flag immediately to prevent race with loadProjects
+    set({ isInitializingFromCwd: true })
+    
+    const detected = detectCurrentRepo()
+    if (!detected) {
+      // Not in a git repo or not an Azure DevOps repo
+      set({ detectedRepo: null, isInitializingFromCwd: false })
+      return
+    }
+    
+    if (!isRepoInConfiguredOrg(detected)) {
+      // Repo belongs to a different org
+      set({ detectedRepo: null, isInitializingFromCwd: false })
+      return
+    }
+    
+    set({ detectedRepo: detected })
+    
+    // Load projects first
+    try {
+      const projects = await getProjects()
+      const projectOptions = projects?.map(p => ({
+        name: `${p.name}`,
+        value: `${p.id}`,
+        description: `${p.id}`,
+      })) || []
+      set({ projects: projectOptions })
+      
+      // Find the matching project (case-insensitive)
+      const matchingProject = projectOptions.find(
+        p => p.name.toLowerCase() === detected.project.toLowerCase()
+      )
+      
+      if (!matchingProject) {
+        set({ isInitializingFromCwd: false })
+        return
+      }
+      
+      // Select the project
+      const projectIndex = projectOptions.findIndex(p => p.value === matchingProject.value)
+      set({ 
+        selectedProject: matchingProject, 
+        selectedProjectIndex: projectIndex,
+        lastSelectedProjectIndex: projectIndex
+      })
+      
+      // Load repos for this project
+      const repos = await getRepos(matchingProject.value)
+      const repoOptions = repos?.map(r => ({
+        name: `${r.name}`,
+        value: `${r.id}`,
+        description: JSON.stringify({
+          httpsUrl: (r as any).cloneUrl || r.webUrl,
+          sshUrl: (r as any).sshUrl || `git@ssh.dev.azure.com:v3/${matchingProject.name}/${matchingProject.name}/${r.name}`
+        }),
+      })) || []
+      set({ repos: repoOptions })
+      
+      // Find the matching repo (case-insensitive)
+      const matchingRepo = repoOptions.find(
+        r => r.name.toLowerCase() === detected.repoName.toLowerCase()
+      )
+      
+      if (!matchingRepo) {
+        set({ isInitializingFromCwd: false })
+        return
+      }
+      
+      // Select the repo
+      const repoIndex = repoOptions.findIndex(r => r.value === matchingRepo.value)
+      set({ 
+        selectedRepo: matchingRepo, 
+        selectedRepoIndex: repoIndex,
+        lastSelectedRepoIndex: repoIndex
+      })
+      
+      // Enter workspace
+      set({ isInWorkspace: true, focusedBox: 'workspace', isInitializingFromCwd: false })
+      
+    } catch (error) {
+      // Silently fail - user can still manually select project/repo
+      set({ isInitializingFromCwd: false })
     }
   },
 
@@ -569,6 +785,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
   selectedPipelineRun: null,
   pipelinesLoading: false,
   pipelineRunsLoading: false,
+  pipelineSteps: [],
+  pipelineStepsLoading: false,
+  pipelineStepsRefreshInterval: null,
+  isRunInProgress: false,
+  // Step logs
+  selectedStepIndex: 0,
+  selectedStep: null,
+  stepLogs: [],
+  stepLogsLoading: false,
+  stepLogsScrollOffset: 0,
   enterPipelinesView: () => {
     const state = get()
     set({ 
@@ -576,17 +802,35 @@ export const useAppStore = create<AppStore>((set, get) => ({
       pipelines: [],
       selectedPipeline: null,
       pipelineRuns: [],
-      selectedPipelineRun: null
+      selectedPipelineRun: null,
+      pipelineSteps: [],
+      pipelineStepsLoading: false,
+      isRunInProgress: false,
+      selectedStep: null,
+      selectedStepIndex: 0,
+      stepLogs: [],
+      stepLogsLoading: false,
+      stepLogsScrollOffset: 0
     })
     state.loadPipelines()
   },
   exitPipelinesView: () => {
+    const state = get()
+    state.stopStepsRefresh()
     set({ 
       isInPipelinesView: false,
       pipelines: [],
       selectedPipeline: null,
       pipelineRuns: [],
-      selectedPipelineRun: null
+      selectedPipelineRun: null,
+      pipelineSteps: [],
+      pipelineStepsLoading: false,
+      isRunInProgress: false,
+      selectedStep: null,
+      selectedStepIndex: 0,
+      stepLogs: [],
+      stepLogsLoading: false,
+      stepLogsScrollOffset: 0
     })
   },
   loadPipelines: async () => {
@@ -629,8 +873,40 @@ export const useAppStore = create<AppStore>((set, get) => ({
     try {
       const builds = await getBuildRuns(state.selectedProject.value, pipelineId)
       const options = builds?.map(build => {
-        const statusIcon = build.result === 2 ? 'ok' : build.result === 8 ? 'fail' : 'run'
-        const statusText = build.result === 2 ? 'succeeded' : build.result === 8 ? 'failed' : build.status === 1 ? 'in progress' : 'unknown'
+        // Build Status: 1 = InProgress, 2 = Completed, 4 = Cancelling, 32 = NotStarted
+        // Build Result (when completed): 2 = Succeeded, 4 = PartiallySucceeded, 8 = Failed, 32 = Canceled
+        let statusIcon = '?'
+        let statusText = 'unknown'
+        
+        if (build.status === 1) {
+          // In Progress
+          statusIcon = 'run'
+          statusText = 'in progress'
+        } else if (build.status === 32) {
+          // Not Started (queued)
+          statusIcon = 'queue'
+          statusText = 'queued'
+        } else if (build.status === 4) {
+          // Cancelling
+          statusIcon = 'cancel'
+          statusText = 'cancelling'
+        } else if (build.status === 2) {
+          // Completed - check result
+          if (build.result === 2) {
+            statusIcon = 'ok'
+            statusText = 'succeeded'
+          } else if (build.result === 4) {
+            statusIcon = 'warn'
+            statusText = 'partially succeeded'
+          } else if (build.result === 8) {
+            statusIcon = 'fail'
+            statusText = 'failed'
+          } else if (build.result === 32) {
+            statusIcon = 'cancel'
+            statusText = 'canceled'
+          }
+        }
+        
         return {
           name: `[${statusIcon}] #${build.buildNumber} - ${statusText}`,
           value: `${build.id}`,
@@ -644,10 +920,133 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   selectPipelineRun: (run: SelectOption) => {
-    set({ selectedPipelineRun: run })
+    const state = get()
+    // Check if run is in progress based on the name format we created
+    const isInProgress = run.name.includes('[run]') || run.name.includes('in progress') || run.name.includes('[queue]') || run.name.includes('queued')
+    set({ selectedPipelineRun: run, pipelineSteps: [], isRunInProgress: isInProgress })
+    
+    // Load steps for this run
+    const buildId = parseInt(run.value)
+    state.loadPipelineSteps(buildId)
+    
+    // If in progress, start auto-refresh
+    if (isInProgress) {
+      state.startStepsRefresh(buildId)
+    }
+  },
+  loadPipelineSteps: async (buildId: number) => {
+    const state = get()
+    if (!state.selectedProject) return
+    
+    set({ pipelineStepsLoading: true })
+    try {
+      const steps = await getBuildTimeline(state.selectedProject.value, buildId)
+      
+      // Check if any step is still in progress
+      const isInProgress = steps.some(s => s.state === 'inProgress')
+      
+      set({ 
+        pipelineSteps: steps, 
+        pipelineStepsLoading: false,
+        isRunInProgress: isInProgress
+      })
+      
+      // If no longer in progress, stop refreshing
+      if (!isInProgress) {
+        state.stopStepsRefresh()
+      }
+    } catch (error) {
+      console.error('Failed to load pipeline steps:', error)
+      set({ pipelineStepsLoading: false })
+    }
+  },
+  startStepsRefresh: (buildId: number) => {
+    const state = get()
+    // Clear any existing interval
+    state.stopStepsRefresh()
+    
+    // Refresh every 3 seconds
+    const interval = setInterval(() => {
+      const currentState = get()
+      if (currentState.selectedPipelineRun && currentState.isRunInProgress) {
+        currentState.loadPipelineSteps(buildId)
+      } else {
+        currentState.stopStepsRefresh()
+      }
+    }, 3000)
+    
+    set({ pipelineStepsRefreshInterval: interval })
+  },
+  stopStepsRefresh: () => {
+    const state = get()
+    if (state.pipelineStepsRefreshInterval) {
+      clearInterval(state.pipelineStepsRefreshInterval)
+      set({ pipelineStepsRefreshInterval: null })
+    }
   },
   goBackFromRuns: () => {
-    set({ selectedPipeline: null, pipelineRuns: [], selectedPipelineRun: null })
+    const state = get()
+    state.stopStepsRefresh()
+    set({ selectedPipeline: null, pipelineRuns: [], selectedPipelineRun: null, pipelineSteps: [], isRunInProgress: false, selectedStep: null, stepLogs: [], selectedStepIndex: 0 })
+  },
+  goBackFromSteps: () => {
+    const state = get()
+    state.stopStepsRefresh()
+    set({ selectedPipelineRun: null, pipelineSteps: [], isRunInProgress: false, selectedStep: null, stepLogs: [], selectedStepIndex: 0 })
+  },
+  
+  // Step navigation and logs
+  navigateStep: (direction: 'up' | 'down') => {
+    const state = get()
+    // Get only Task type steps (the actual executable steps)
+    const taskSteps = state.pipelineSteps.filter(s => s.type === 'Task')
+    if (taskSteps.length === 0) return
+    
+    let newIndex = state.selectedStepIndex
+    if (direction === 'down') {
+      newIndex = Math.min(state.selectedStepIndex + 1, taskSteps.length - 1)
+    } else {
+      newIndex = Math.max(state.selectedStepIndex - 1, 0)
+    }
+    
+    if (newIndex !== state.selectedStepIndex) {
+      const step = taskSteps[newIndex]
+      set({ selectedStepIndex: newIndex, selectedStep: step, stepLogs: [], stepLogsScrollOffset: 0 })
+      // Auto-load logs for the new step
+      if (step?.logId) {
+        state.loadStepLogs(step)
+      }
+    }
+  },
+  selectStep: (step: BuildStep, index: number) => {
+    const state = get()
+    set({ selectedStep: step, selectedStepIndex: index, stepLogs: [], stepLogsScrollOffset: 0 })
+    if (step.logId) {
+      state.loadStepLogs(step)
+    }
+  },
+  loadStepLogs: async (step: BuildStep) => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedPipelineRun || !step.logId) return
+    
+    set({ stepLogsLoading: true })
+    try {
+      const buildId = parseInt(state.selectedPipelineRun.value)
+      const logs = await getBuildStepLogs(state.selectedProject.value, buildId, step.logId)
+      set({ stepLogs: logs, stepLogsLoading: false })
+    } catch (error) {
+      console.error('Failed to load step logs:', error)
+      set({ stepLogsLoading: false })
+    }
+  },
+  scrollLogs: (direction: 'up' | 'down' | 'pageup' | 'pagedown') => {
+    const state = get()
+    const step = direction === 'up' ? -1 : direction === 'down' ? 1 : direction === 'pageup' ? -10 : 10
+    const newOffset = Math.max(0, Math.min(state.stepLogsScrollOffset + step, Math.max(0, state.stepLogs.length - 20)))
+    set({ stepLogsScrollOffset: newOffset })
+  },
+  exitStepLogs: () => {
+    set({ selectedStep: null, stepLogs: [], stepLogsScrollOffset: 0, selectedStepIndex: 0 })
   },
 
   // Pull Requests functionality
@@ -1298,3 +1697,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })
   },
 }))
+
+// Auto-initialize from CWD when the store is created (before React renders)
+// This runs synchronously during module load
+if (hasCredentials()) {
+  // Set the flag synchronously first
+  useAppStore.setState({ isInitializingFromCwd: true })
+  // Then run the async initialization
+  useAppStore.getState().initializeFromCwd()
+}
