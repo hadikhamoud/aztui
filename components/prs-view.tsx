@@ -105,7 +105,22 @@ export function PRsView() {
     reviewerIsRequired,
     selectedConflict,
     selectedConflictIndex,
-    conflictContentLoading
+    conflictContentLoading,
+    // Create PR state
+    isCreatingPR,
+    createPRStep,
+    branches,
+    branchesLoading,
+    createPRSourceBranch,
+    createPRTargetBranch,
+    createPRTitle,
+    createPRDescription,
+    createPRReviewerIds,
+    createPRIsDraft,
+    selectedBranchIndex,
+    createPRSearchQuery,
+    getFilteredBranches,
+    getFilteredReviewers
   } = useAppStore()
 
   const isFocused = focusedBox === 'workspace'
@@ -506,6 +521,200 @@ export function PRsView() {
     )
   }
 
+  // Show Create PR view
+  if (isCreatingPR) {
+    return (
+      <box flexDirection="column" gap={1}>
+        <text attributes={TextAttributes.BOLD}>
+          Create Pull Request
+        </text>
+        
+        {/* Progress indicator */}
+        <box flexDirection="row" gap={1}>
+          <text fg={createPRStep === 'source' ? '#007595' : createPRSourceBranch ? '#22c55e' : '#888888'}>
+            [1] Source
+          </text>
+          <text fg="#888888">→</text>
+          <text fg={createPRStep === 'target' ? '#007595' : createPRTargetBranch ? '#22c55e' : '#888888'}>
+            [2] Target
+          </text>
+          <text fg="#888888">→</text>
+          <text fg={createPRStep === 'title' ? '#007595' : createPRTitle ? '#22c55e' : '#888888'}>
+            [3] Title
+          </text>
+          <text fg="#888888">→</text>
+          <text fg={createPRStep === 'description' ? '#007595' : '#888888'}>
+            [4] Description
+          </text>
+          <text fg="#888888">→</text>
+          <text fg={createPRStep === 'reviewers' ? '#007595' : createPRReviewerIds.length > 0 ? '#22c55e' : '#888888'}>
+            [5] Reviewers
+          </text>
+          <text fg="#888888">→</text>
+          <text fg={createPRStep === 'confirm' ? '#007595' : '#888888'}>
+            [6] Confirm
+          </text>
+        </box>
+        
+        {/* Action status */}
+        {prActionStatus && (
+          <text fg={prActionStatus.isError ? 'red' : 'green'}>
+            {prActionStatus.message}
+          </text>
+        )}
+        
+        {/* Step content */}
+        {branchesLoading ? (
+          <text fg="#888888">Loading branches...</text>
+        ) : createPRStep === 'source' ? (
+          <box flexDirection="column" gap={1}>
+            <text fg="#888888">Select source branch (the branch with your changes):</text>
+            {createPRSourceBranch && (
+              <text fg="#22c55e">Selected: {createPRSourceBranch}</text>
+            )}
+            {/* Search input */}
+            <box flexDirection="row" gap={1}>
+              <text fg="#888888">Search:</text>
+              <text fg="#007595">{createPRSearchQuery}<span fg="#007595">_</span></text>
+            </box>
+            <box flexDirection="column" gap={0} marginTop={1}>
+              {getFilteredBranches().slice(0, 15).map((branch, index) => (
+                <text 
+                  key={branch.name}
+                  fg={index === selectedBranchIndex ? '#007595' : 'white'}
+                  bg={index === selectedBranchIndex ? '#1a3a4a' : undefined}
+                >
+                  {index === selectedBranchIndex ? '▶ ' : '  '}{branch.name}
+                </text>
+              ))}
+              {getFilteredBranches().length > 15 && (
+                <text fg="#888888">  ...and {getFilteredBranches().length - 15} more branches</text>
+              )}
+              {getFilteredBranches().length === 0 && (
+                <text fg="#888888">  No branches match your search</text>
+              )}
+            </box>
+            <text fg="#888888" marginTop={1}>Type to search | Enter: Select | Esc: Cancel</text>
+          </box>
+        ) : createPRStep === 'target' ? (
+          <box flexDirection="column" gap={1}>
+            <text fg="#888888">Select target branch (the branch to merge into):</text>
+            {createPRTargetBranch && (
+              <text fg="#22c55e">Selected: {createPRTargetBranch}</text>
+            )}
+            {/* Search input */}
+            <box flexDirection="row" gap={1}>
+              <text fg="#888888">Search:</text>
+              <text fg="#007595">{createPRSearchQuery}<span fg="#007595">_</span></text>
+            </box>
+            <box flexDirection="column" gap={0} marginTop={1}>
+              {getFilteredBranches().slice(0, 15).map((branch, index) => (
+                <text 
+                  key={branch.name}
+                  fg={index === selectedBranchIndex ? '#007595' : 'white'}
+                  bg={index === selectedBranchIndex ? '#1a3a4a' : undefined}
+                >
+                  {index === selectedBranchIndex ? '▶ ' : '  '}{branch.name}
+                </text>
+              ))}
+              {getFilteredBranches().length === 0 && (
+                <text fg="#888888">  No branches match your search</text>
+              )}
+            </box>
+            <text fg="#888888" marginTop={1}>Type to search | Enter: Select | Tab: Back | Esc: Cancel</text>
+          </box>
+        ) : createPRStep === 'title' ? (
+          <box flexDirection="column" gap={1}>
+            <text fg="#888888">Enter PR title:</text>
+            <box 
+              borderStyle="rounded" 
+              borderColor="#007595"
+              padding={0.5}
+            >
+              <text>
+                {createPRTitle || '(Enter title...)'}
+                <span fg="#007595">_</span>
+              </text>
+            </box>
+            <text fg="#888888" marginTop={1}>Enter: Next | Tab: Back | Esc: Cancel</text>
+          </box>
+        ) : createPRStep === 'description' ? (
+          <box flexDirection="column" gap={1}>
+            <text fg="#888888">Enter PR description (optional):</text>
+            <box 
+              borderStyle="rounded" 
+              borderColor="#007595"
+              padding={0.5}
+              minHeight={3}
+            >
+              <text>
+                {createPRDescription || '(Enter description...)'}
+                <span fg="#007595">_</span>
+              </text>
+            </box>
+            <text fg="#888888" marginTop={1}>Enter: Next | Tab: Back | Esc: Cancel</text>
+          </box>
+        ) : createPRStep === 'reviewers' ? (
+          <box flexDirection="column" gap={1}>
+            <text fg="#888888">Select reviewers (Space to toggle, optional):</text>
+            {createPRReviewerIds.length > 0 && (
+              <text fg="#22c55e">
+                Selected: {teamMembers.filter(m => createPRReviewerIds.includes(m.id)).map(m => m.displayName).join(', ')}
+              </text>
+            )}
+            {/* Search input */}
+            <box flexDirection="row" gap={1}>
+              <text fg="#888888">Search:</text>
+              <text fg="#007595">{createPRSearchQuery}<span fg="#007595">_</span></text>
+            </box>
+            <box flexDirection="column" gap={0} marginTop={1}>
+              {getFilteredReviewers().slice(0, 10).map((member, index) => {
+                const isSelected = createPRReviewerIds.includes(member.id)
+                return (
+                  <text 
+                    key={member.id}
+                    fg={index === selectedBranchIndex ? '#007595' : 'white'}
+                    bg={index === selectedBranchIndex ? '#1a3a4a' : undefined}
+                  >
+                    {index === selectedBranchIndex ? '▶ ' : '  '}
+                    [{isSelected ? 'x' : ' '}] {member.displayName}
+                  </text>
+                )
+              })}
+              {getFilteredReviewers().length === 0 && (
+                <text fg="#888888">  No reviewers match your search</text>
+              )}
+            </box>
+            <text fg="#888888" marginTop={1}>Type to search | Space: Toggle | Enter: Next | Tab: Back | Esc: Cancel</text>
+          </box>
+        ) : createPRStep === 'confirm' ? (
+          <box flexDirection="column" gap={1}>
+            <text fg="#888888">Review and confirm:</text>
+            <box flexDirection="column" gap={0} marginTop={1}>
+              <text>Source: <span fg="#22c55e">{createPRSourceBranch}</span></text>
+              <text>Target: <span fg="#22c55e">{createPRTargetBranch}</span></text>
+              <text>Title: <span fg="#22c55e">{createPRTitle}</span></text>
+              {createPRDescription && (
+                <text>Description: <span fg="#888888">{createPRDescription.slice(0, 50)}{createPRDescription.length > 50 ? '...' : ''}</span></text>
+              )}
+              {createPRReviewerIds.length > 0 && (
+                <text>Reviewers: <span fg="#22c55e">{teamMembers.filter(m => createPRReviewerIds.includes(m.id)).map(m => m.displayName).join(', ')}</span></text>
+              )}
+              <box flexDirection="row" gap={2} marginTop={1}>
+                <text>Create as Draft:</text>
+                <text fg={createPRIsDraft ? '#22c55e' : '#888888'}>
+                  [{createPRIsDraft ? 'x' : ' '}] {createPRIsDraft ? 'Yes' : 'No'}
+                </text>
+                <text fg="#888888">(D to toggle)</text>
+              </box>
+            </box>
+            <text fg="#888888" marginTop={1}>Enter: Create PR | D: Toggle Draft | Tab: Back | Esc: Cancel</text>
+          </box>
+        ) : null}
+      </box>
+    )
+  }
+
   // Show PR list
   return (
     <box flexDirection="column" gap={1}>
@@ -516,14 +725,17 @@ export function PRsView() {
       {prsLoading ? (
         <text fg="#888888">Loading pull requests...</text>
       ) : pullRequests.length === 0 ? (
-        <text fg="#888888">No active pull requests found</text>
+        <text fg="#888888">No active pull requests found. Press N to create one.</text>
       ) : (
-        <Select 
-          options={pullRequests} 
-          focused={isFocused} 
-          value={selectedPR?.value}
-          onSelect={handlePRSelect}
-        />
+        <>
+          <Select 
+            options={pullRequests} 
+            focused={isFocused} 
+            value={selectedPR?.value}
+            onSelect={handlePRSelect}
+          />
+          <text fg="#888888" marginTop={1}>Press N to create a new PR</text>
+        </>
       )}
     </box>
   )

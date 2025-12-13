@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SelectOption } from '@opentui/core'
-import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, type BuildStep, type DetectedRepo } from '../api'
+import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, type BuildStep, type DetectedRepo } from '../api'
 import { hasCredentials, saveConfig, getCredentials } from '../config'
 
 export interface PRFileChange {
@@ -198,6 +198,20 @@ interface AppStore {
   selectedReviewerIndex: number
   reviewerIsRequired: boolean
   
+  // Create PR functionality
+  isCreatingPR: boolean
+  createPRStep: 'source' | 'target' | 'title' | 'description' | 'reviewers' | 'confirm'
+  branches: { name: string; objectId: string }[]
+  branchesLoading: boolean
+  createPRSourceBranch: string
+  createPRTargetBranch: string
+  createPRTitle: string
+  createPRDescription: string
+  createPRReviewerIds: string[]
+  createPRIsDraft: boolean
+  selectedBranchIndex: number
+  createPRSearchQuery: string
+  
   enterPRsView: () => void
   exitPRsView: () => void
   loadPullRequests: () => Promise<void>
@@ -208,6 +222,7 @@ interface AppStore {
   navigatePRFile: (direction: 'up' | 'down') => void
   goBackFromPRFiles: () => void
   openPRInBrowser: () => void
+  copyPRLinkToClipboard: () => void
   approvePR: () => Promise<void>
   startAddingComment: () => void
   cancelAddingComment: () => void
@@ -228,6 +243,24 @@ interface AppStore {
   selectConflict: (index: number) => Promise<void>
   navigateConflict: (direction: 'up' | 'down') => void
   exitConflictView: () => void
+  
+  // Create PR actions
+  startCreatingPR: () => Promise<void>
+  cancelCreatingPR: () => void
+  setCreatePRSourceBranch: (branch: string) => void
+  setCreatePRTargetBranch: (branch: string) => void
+  setCreatePRTitle: (title: string) => void
+  setCreatePRDescription: (desc: string) => void
+  toggleCreatePRReviewer: (reviewerId: string) => void
+  toggleCreatePRDraft: () => void
+  nextCreatePRStep: () => void
+  prevCreatePRStep: () => void
+  navigateBranch: (direction: 'up' | 'down') => void
+  selectCurrentBranch: () => void
+  submitCreatePR: () => Promise<void>
+  setCreatePRSearchQuery: (query: string) => void
+  getFilteredBranches: () => { name: string; objectId: string }[]
+  getFilteredReviewers: () => { id: string; displayName: string }[]
 }
 
 const focusOrder: FocusedBox[] = ['projects', 'repos', 'workspace']
@@ -1352,6 +1385,40 @@ export const useAppStore = create<AppStore>((set, get) => ({
     setTimeout(() => set({ prActionStatus: null }), 2000)
   },
   
+  copyPRLinkToClipboard: () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
+    
+    const url = getPullRequestUrl(
+      state.selectedProject.name,
+      state.selectedRepo.name,
+      parseInt(state.selectedPR.value)
+    )
+    
+    // Copy to clipboard using platform-specific command
+    const { exec } = require('child_process')
+    const platform = process.platform
+    
+    let command: string
+    if (platform === 'darwin') {
+      command = `echo "${url}" | pbcopy`
+    } else if (platform === 'win32') {
+      command = `echo ${url} | clip`
+    } else {
+      // Linux - try xclip first, then xsel
+      command = `echo "${url}" | xclip -selection clipboard 2>/dev/null || echo "${url}" | xsel --clipboard`
+    }
+    
+    exec(command, (error: Error | null) => {
+      if (error) {
+        set({ prActionStatus: { message: 'Failed to copy to clipboard', isError: true } })
+      } else {
+        set({ prActionStatus: { message: 'PR link copied to clipboard!', isError: false } })
+      }
+      setTimeout(() => set({ prActionStatus: null }), 2000)
+    })
+  },
+  
   approvePR: async () => {
     const state = get()
     if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
@@ -1695,6 +1762,258 @@ export const useAppStore = create<AppStore>((set, get) => ({
       selectedConflictIndex: 0,
       conflictContentLoading: false
     })
+  },
+  
+  // Create PR functionality
+  isCreatingPR: false,
+  createPRStep: 'source' as const,
+  branches: [],
+  branchesLoading: false,
+  createPRSourceBranch: '',
+  createPRTargetBranch: '',
+  createPRTitle: '',
+  createPRDescription: '',
+  createPRReviewerIds: [],
+  createPRIsDraft: false,
+  selectedBranchIndex: 0,
+  createPRSearchQuery: '',
+  
+  setCreatePRSearchQuery: (query: string) => {
+    set({ createPRSearchQuery: query, selectedBranchIndex: 0 })
+  },
+  
+  getFilteredBranches: () => {
+    const state = get()
+    const query = state.createPRSearchQuery.toLowerCase()
+    let filtered = state.branches
+    
+    // For target step, exclude source branch
+    if (state.createPRStep === 'target') {
+      filtered = filtered.filter(b => b.name !== state.createPRSourceBranch)
+    }
+    
+    if (!query) return filtered
+    return filtered.filter(b => b.name.toLowerCase().includes(query))
+  },
+  
+  getFilteredReviewers: () => {
+    const state = get()
+    const query = state.createPRSearchQuery.toLowerCase()
+    if (!query) return state.teamMembers
+    return state.teamMembers.filter(m => m.displayName.toLowerCase().includes(query))
+  },
+  
+  startCreatingPR: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo) return
+    
+    set({ 
+      isCreatingPR: true, 
+      createPRStep: 'source',
+      branchesLoading: true,
+      createPRSourceBranch: '',
+      createPRTargetBranch: '',
+      createPRTitle: '',
+      createPRDescription: '',
+      createPRReviewerIds: [],
+      createPRIsDraft: false,
+      selectedBranchIndex: 0,
+      createPRSearchQuery: ''
+    })
+    
+    try {
+      // Load branches
+      const branches = await getBranches(state.selectedProject.value, state.selectedRepo.value)
+      
+      // Also load team members for reviewer selection
+      const members = await getTeamMembers(state.selectedProject.value)
+      const teamMembers = members?.map(m => ({
+        id: (m.identity as any)?.id || '',
+        displayName: (m.identity as any)?.displayName || 'Unknown'
+      })).filter(m => m.id) || []
+      
+      // Try to detect current branch and set defaults
+      let defaultTarget = 'main'
+      const mainBranch = branches.find(b => b.name === 'main' || b.name === 'master')
+      if (mainBranch) {
+        defaultTarget = mainBranch.name
+      }
+      
+      set({ 
+        branches, 
+        branchesLoading: false,
+        teamMembers,
+        createPRTargetBranch: defaultTarget
+      })
+    } catch (error) {
+      console.error('Failed to load branches:', error)
+      set({ branchesLoading: false })
+    }
+  },
+  
+  cancelCreatingPR: () => {
+    set({ 
+      isCreatingPR: false,
+      createPRStep: 'source',
+      branches: [],
+      createPRSourceBranch: '',
+      createPRTargetBranch: '',
+      createPRTitle: '',
+      createPRDescription: '',
+      createPRReviewerIds: [],
+      createPRIsDraft: false,
+      selectedBranchIndex: 0,
+      createPRSearchQuery: ''
+    })
+  },
+  
+  setCreatePRSourceBranch: (branch: string) => {
+    set({ createPRSourceBranch: branch })
+  },
+  
+  setCreatePRTargetBranch: (branch: string) => {
+    set({ createPRTargetBranch: branch })
+  },
+  
+  setCreatePRTitle: (title: string) => {
+    set({ createPRTitle: title })
+  },
+  
+  setCreatePRDescription: (desc: string) => {
+    set({ createPRDescription: desc })
+  },
+  
+  toggleCreatePRReviewer: (reviewerId: string) => {
+    const state = get()
+    const currentIds = state.createPRReviewerIds
+    if (currentIds.includes(reviewerId)) {
+      set({ createPRReviewerIds: currentIds.filter(id => id !== reviewerId) })
+    } else {
+      set({ createPRReviewerIds: [...currentIds, reviewerId] })
+    }
+  },
+  
+  toggleCreatePRDraft: () => {
+    const state = get()
+    set({ createPRIsDraft: !state.createPRIsDraft })
+  },
+  
+  nextCreatePRStep: () => {
+    const state = get()
+    const steps: Array<'source' | 'target' | 'title' | 'description' | 'reviewers' | 'confirm'> = 
+      ['source', 'target', 'title', 'description', 'reviewers', 'confirm']
+    const currentIndex = steps.indexOf(state.createPRStep)
+    
+    // Validate current step before moving
+    if (state.createPRStep === 'source' && !state.createPRSourceBranch) {
+      set({ prActionStatus: { message: 'Please select a source branch', isError: true } })
+      setTimeout(() => set({ prActionStatus: null }), 2000)
+      return
+    }
+    if (state.createPRStep === 'target' && !state.createPRTargetBranch) {
+      set({ prActionStatus: { message: 'Please select a target branch', isError: true } })
+      setTimeout(() => set({ prActionStatus: null }), 2000)
+      return
+    }
+    if (state.createPRStep === 'title' && !state.createPRTitle.trim()) {
+      set({ prActionStatus: { message: 'Please enter a title', isError: true } })
+      setTimeout(() => set({ prActionStatus: null }), 2000)
+      return
+    }
+    
+    if (currentIndex < steps.length - 1) {
+      set({ createPRStep: steps[currentIndex + 1], selectedBranchIndex: 0, createPRSearchQuery: '' })
+    }
+  },
+  
+  prevCreatePRStep: () => {
+    const state = get()
+    const steps: Array<'source' | 'target' | 'title' | 'description' | 'reviewers' | 'confirm'> = 
+      ['source', 'target', 'title', 'description', 'reviewers', 'confirm']
+    const currentIndex = steps.indexOf(state.createPRStep)
+    if (currentIndex > 0) {
+      set({ createPRStep: steps[currentIndex - 1], selectedBranchIndex: 0, createPRSearchQuery: '' })
+    }
+  },
+  
+  navigateBranch: (direction: 'up' | 'down') => {
+    const state = get()
+    // Use filtered list length for navigation
+    const filteredLength = state.createPRStep === 'reviewers' 
+      ? state.getFilteredReviewers().length 
+      : state.getFilteredBranches().length
+    if (filteredLength === 0) return
+    
+    let newIndex = state.selectedBranchIndex
+    if (direction === 'down') {
+      newIndex = Math.min(state.selectedBranchIndex + 1, filteredLength - 1)
+    } else {
+      newIndex = Math.max(state.selectedBranchIndex - 1, 0)
+    }
+    set({ selectedBranchIndex: newIndex })
+  },
+  
+  selectCurrentBranch: () => {
+    const state = get()
+    const filteredBranches = state.getFilteredBranches()
+    const branch = filteredBranches[state.selectedBranchIndex]
+    if (!branch) return
+    
+    if (state.createPRStep === 'source') {
+      set({ createPRSourceBranch: branch.name, createPRSearchQuery: '' })
+      state.nextCreatePRStep()
+    } else if (state.createPRStep === 'target') {
+      set({ createPRTargetBranch: branch.name, createPRSearchQuery: '' })
+      state.nextCreatePRStep()
+    }
+  },
+  
+  submitCreatePR: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo) return
+    
+    const { createPRSourceBranch, createPRTargetBranch, createPRTitle, createPRDescription, createPRReviewerIds, createPRIsDraft } = state
+    
+    if (!createPRSourceBranch || !createPRTargetBranch || !createPRTitle.trim()) {
+      set({ prActionStatus: { message: 'Please fill in all required fields', isError: true } })
+      setTimeout(() => set({ prActionStatus: null }), 2000)
+      return
+    }
+    
+    set({ prActionLoading: true, prActionStatus: { message: 'Creating pull request...', isError: false } })
+    
+    try {
+      const result = await createPullRequest(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        createPRSourceBranch,
+        createPRTargetBranch,
+        createPRTitle.trim(),
+        createPRDescription.trim(),
+        createPRReviewerIds,
+        createPRIsDraft
+      )
+      
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: result.message, isError: !result.success } 
+      })
+      
+      if (result.success) {
+        // Reset create PR state and refresh PR list
+        setTimeout(() => {
+          const currentState = get()
+          currentState.cancelCreatingPR()
+          currentState.loadPullRequests()
+          set({ prActionStatus: null })
+        }, 2000)
+      }
+    } catch (error) {
+      set({ 
+        prActionLoading: false, 
+        prActionStatus: { message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isError: true } 
+      })
+    }
   },
 }))
 

@@ -234,6 +234,169 @@ function App() {
 
     // Handle PRs View keyboard input
     if (state.isInPRsView && state.focusedBox === 'workspace') {
+      // Handle Create PR mode
+      if (state.isCreatingPR) {
+        if (key.name === "escape") {
+          state.cancelCreatingPR()
+          return
+        }
+        
+        // Branch selection steps (source and target)
+        if (state.createPRStep === 'source' || state.createPRStep === 'target') {
+          if (key.name === "up") {
+            state.navigateBranch('up')
+            return
+          }
+          if (key.name === "down") {
+            state.navigateBranch('down')
+            return
+          }
+          if (key.name === "return") {
+            state.selectCurrentBranch()
+            return
+          }
+          if (key.name === "tab" && state.createPRStep === 'target') {
+            state.prevCreatePRStep()
+            return
+          }
+          if (key.name === "backspace") {
+            state.setCreatePRSearchQuery(state.createPRSearchQuery.slice(0, -1))
+            return
+          }
+          // Handle typed characters for search
+          if (key.sequence && key.name !== 'escape' && key.name !== 'tab') {
+            if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+              return
+            }
+            const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+            if (printable.length > 0) {
+              state.setCreatePRSearchQuery(state.createPRSearchQuery + printable)
+              return
+            }
+          }
+          return
+        }
+        
+        // Title input step
+        if (state.createPRStep === 'title') {
+          if (key.name === "backspace") {
+            state.setCreatePRTitle(state.createPRTitle.slice(0, -1))
+            return
+          }
+          if (key.name === "return") {
+            state.nextCreatePRStep()
+            return
+          }
+          if (key.name === "tab") {
+            state.prevCreatePRStep()
+            return
+          }
+          // Handle typed characters and pasted text
+          if (key.sequence && key.name !== 'escape') {
+            if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+              return
+            }
+            const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+            if (printable.length > 0) {
+              state.setCreatePRTitle(state.createPRTitle + printable)
+              return
+            }
+          }
+          return
+        }
+        
+        // Description input step
+        if (state.createPRStep === 'description') {
+          if (key.name === "backspace") {
+            state.setCreatePRDescription(state.createPRDescription.slice(0, -1))
+            return
+          }
+          if (key.name === "return" && key.ctrl) {
+            state.nextCreatePRStep()
+            return
+          }
+          if (key.name === "return") {
+            state.setCreatePRDescription(state.createPRDescription + '\n')
+            return
+          }
+          if (key.name === "tab") {
+            state.prevCreatePRStep()
+            return
+          }
+          // Handle typed characters and pasted text
+          if (key.sequence && key.name !== 'escape') {
+            if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+              return
+            }
+            const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+            if (printable.length > 0) {
+              state.setCreatePRDescription(state.createPRDescription + printable)
+              return
+            }
+          }
+          return
+        }
+        
+        // Reviewers selection step
+        if (state.createPRStep === 'reviewers') {
+          if (key.name === "up") {
+            state.navigateBranch('up')
+            return
+          }
+          if (key.name === "down") {
+            state.navigateBranch('down')
+            return
+          }
+          if (key.name === "space") {
+            const filteredReviewers = state.getFilteredReviewers()
+            const member = filteredReviewers[state.selectedBranchIndex]
+            if (member) {
+              state.toggleCreatePRReviewer(member.id)
+            }
+            return
+          }
+          if (key.name === "return") {
+            state.nextCreatePRStep()
+            return
+          }
+          if (key.name === "tab") {
+            state.prevCreatePRStep()
+            return
+          }
+          // Handle typed characters for search
+          if (key.sequence && key.name !== 'escape' && key.name !== 'tab' && key.name !== 'space') {
+            if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+              return
+            }
+            const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+            if (printable.length > 0) {
+              state.setCreatePRSearchQuery(state.createPRSearchQuery + printable)
+              return
+            }
+          }
+          return
+        }
+        
+        // Confirm step
+        if (state.createPRStep === 'confirm') {
+          if (key.name === "d") {
+            state.toggleCreatePRDraft()
+            return
+          }
+          if (key.name === "return") {
+            state.submitCreatePR()
+            return
+          }
+          if (key.name === "tab") {
+            state.prevCreatePRStep()
+            return
+          }
+          return
+        }
+        
+        return
+      }
+      
       // Handle comment input mode
       if (state.isAddingComment) {
         if (key.name === "escape") {
@@ -359,6 +522,10 @@ function App() {
           state.openPRInBrowser()
           return
         }
+        if (key.name === "y") {
+          state.copyPRLinkToClipboard()
+          return
+        }
         if (key.name === "a") {
           state.approvePR()
           return
@@ -404,6 +571,12 @@ function App() {
           }
           return
         }
+      }
+      
+      // Create new PR (when not viewing a specific PR)
+      if (!state.selectedPR && key.name === "n") {
+        state.startCreatingPR()
+        return
       }
       return
     }

@@ -756,6 +756,64 @@ export async function getTeamMembers(projectId: string) {
   }
 }
 
+// Get branches for a repository
+export async function getBranches(projectId: string, repositoryId: string) {
+  await initializeConnection();
+  if (!gitApi) throw new Error("Failed to initialize git API");
+
+  const refs = await gitApi.getRefs(repositoryId, projectId, "heads/");
+  return refs?.map(ref => ({
+    name: ref.name?.replace('refs/heads/', '') || '',
+    objectId: ref.objectId || ''
+  })) || [];
+}
+
+// Create a new pull request
+export async function createPullRequest(
+  projectId: string,
+  repositoryId: string,
+  sourceBranch: string,
+  targetBranch: string,
+  title: string,
+  description: string,
+  reviewerIds: string[] = [],
+  isDraft: boolean = false
+): Promise<{ success: boolean; message: string; pullRequestId?: number }> {
+  await initializeConnection();
+  if (!gitApi) throw new Error("Failed to initialize git API");
+
+  try {
+    // Create the PR
+    const pr = await gitApi.createPullRequest(
+      {
+        sourceRefName: `refs/heads/${sourceBranch}`,
+        targetRefName: `refs/heads/${targetBranch}`,
+        title,
+        description,
+        isDraft,
+        reviewers: reviewerIds.map(id => ({ id }))
+      },
+      repositoryId,
+      projectId
+    );
+
+    if (!pr || !pr.pullRequestId) {
+      return { success: false, message: 'Failed to create pull request' };
+    }
+
+    return { 
+      success: true, 
+      message: `Pull request #${pr.pullRequestId} created successfully`,
+      pullRequestId: pr.pullRequestId
+    };
+  } catch (error) {
+    return { 
+      success: false, 
+      message: `Failed to create PR: ${error instanceof Error ? error.message : 'Unknown error'}` 
+    };
+  }
+}
+
 export async function cloneRepo(repoUrl: string, targetPath: string): Promise<{ success: boolean; message: string }> {
   try {
     const { spawn } = require('child_process');
