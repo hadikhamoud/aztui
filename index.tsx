@@ -1,7 +1,7 @@
 import { createCliRenderer, PasteEvent } from "@opentui/core"
 import { useKeyboard, createRoot, useAppContext } from "@opentui/react"
 import { useTerminalDimensions } from "@opentui/react"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useAppStore } from "./store/app-store"
 import { ProjectBox } from "./components/project-box"
 import { RepoBox } from "./components/repo-box"
@@ -9,11 +9,31 @@ import { WorkspaceBox } from "./components/workspace-box"
 import { Controls } from "./components/controls"
 import { SearchBar } from "./components/search-bar"
 import { SetupView } from "./components/setup-view"
+import { checkForUpdates, UpdateCheckResult } from "./config/updater"
 
 function App() {
   const { width, height } = useTerminalDimensions()
   // Subscribe to trigger re-renders, but use getState() in keyboard handler for fresh values
   const { needsSetup } = useAppStore()
+  
+  // Update notification state
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null)
+  const [showUpdateBanner, setShowUpdateBanner] = useState(false)
+  
+  // Check for updates on app start
+  useEffect(() => {
+    checkForUpdates().then((result) => {
+      setUpdateResult(result)
+      // Show banner if update was applied or is pending
+      if (result.updateApplied || result.hasUpdate) {
+        setShowUpdateBanner(true)
+        // Auto-hide the banner after 5 seconds
+        setTimeout(() => setShowUpdateBanner(false), 5000)
+      }
+    }).catch(() => {
+      // Silently ignore update check failures
+    })
+  }, [])
   
   // Handle initialization after setup completes
   // The initial auto-detect is handled in the store module itself at load time
@@ -660,19 +680,45 @@ function App() {
     }
   }, [keyHandler])
 
+  // Update banner component
+  const UpdateBanner = () => {
+    if (!showUpdateBanner || !updateResult) return null
+    
+    const bgColor = updateResult.updateApplied ? '#22c55e' : '#3b82f6'
+    const message = updateResult.updateApplied 
+      ? `Updated to ${updateResult.latestVersion}!`
+      : updateResult.hasUpdate
+        ? `Update ${updateResult.latestVersion} ready - restart to apply`
+        : ''
+    
+    if (!message) return null
+    
+    return (
+      <box width={width} height={1} backgroundColor={bgColor}>
+        <text fg="white">{` ${message} `}</text>
+      </box>
+    )
+  }
+
   // Show setup view if credentials are missing
   if (needsSetup) {
     return (
       <box width={width} height={height} flexDirection="column">
+        <UpdateBanner />
         <SetupView />
       </box>
     )
   }
 
+  const mainHeight = showUpdateBanner && updateResult && (updateResult.updateApplied || updateResult.hasUpdate) 
+    ? height - 3 
+    : height - 2
+
   return (
     <box width={width} height={height} flexDirection="column">
-      <box width={width} height={height - 2} flexDirection="row">
-        <box flexDirection="column" width={Math.floor(width / 3)} height={height - 2}>
+      <UpdateBanner />
+      <box width={width} height={mainHeight} flexDirection="row">
+        <box flexDirection="column" width={Math.floor(width / 3)} height={mainHeight}>
           <ProjectBox />
           <RepoBox />
         </box>

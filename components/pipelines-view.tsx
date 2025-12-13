@@ -75,20 +75,23 @@ function StepRow({ step, indent = 0, showDetails = false, isSelected = false }: 
 
       {/* Show current operation for in-progress steps */}
       {step.state === 'inProgress' && step.currentOperation && (
-        <text fg="#888888">{indentStr}      ↳ {step.currentOperation}</text>
+        <text fg="#888888">{indentStr}      ↳ {String(step.currentOperation)}</text>
       )}
 
       {/* Show issue messages (errors/warnings) when showDetails is true */}
       {showDetails && step.issues && step.issues.length > 0 && (
         <box flexDirection="column">
-          {step.issues.slice(0, 5).map((issue, idx) => (
-            <text
-              key={idx}
-              fg={issue.type === 'error' ? '#FF4444' : '#FFA500'}
-            >
-              {indentStr}      {issue.type === 'error' ? '✗' : '⚠'} {issue.message.slice(0, 100)}{issue.message.length > 100 ? '...' : ''}
-            </text>
-          ))}
+          {step.issues.slice(0, 5).map((issue, idx) => {
+            const msg = String(issue.message ?? '')
+            return (
+              <text
+                key={idx}
+                fg={issue.type === 'error' ? '#FF4444' : '#FFA500'}
+              >
+                {indentStr}      {issue.type === 'error' ? '✗' : '⚠'} {msg.slice(0, 100)}{msg.length > 100 ? '...' : ''}
+              </text>
+            )
+          })}
           {step.issues.length > 5 && (
             <text fg="#888888">{indentStr}      ... and {step.issues.length - 5} more</text>
           )}
@@ -168,16 +171,17 @@ export function PipelinesView() {
             <box flexDirection="column" marginTop={1}>
               {visibleLogs.map((line, idx) => {
                 const lineNum = stepLogsScrollOffset + idx + 1
+                // Ensure line is a string
+                const lineStr = String(line ?? '')
                 // Color error lines red, warning lines yellow
-                const isError = line.toLowerCase().includes('error') || line.includes('##[error]')
-                const isWarning = line.toLowerCase().includes('warning') || line.includes('##[warning]')
+                const isError = lineStr.toLowerCase().includes('error') || lineStr.includes('##[error]')
+                const isWarning = lineStr.toLowerCase().includes('warning') || lineStr.includes('##[warning]')
                 const lineColor = isError ? '#FF4444' : isWarning ? '#FFA500' : undefined
                 // Clean up Azure DevOps formatting tags
-                const cleanLine = line.replace(/##\[(error|warning|section|command|debug)\]/g, '')
+                const cleanLine = lineStr.replace(/##\[(error|warning|section|command|debug)\]/g, '')
                 return (
                   <text key={idx} fg={lineColor}>
-                    <text fg="#666666">{String(lineNum).padStart(4, ' ')} </text>
-                    {cleanLine}
+                    <span fg="#666666">{String(lineNum).padStart(4, ' ')} </span>{cleanLine}
                   </text>
                 )
               })}
