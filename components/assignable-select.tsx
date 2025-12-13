@@ -26,7 +26,6 @@ class ExtendedSelectRenderable extends SelectRenderable {
     this.syncSelectedIndex()
   }
 
-  // Override options setter to re-sync selected index when options change
   set options(opts: SelectOption[]) {
     super.options = opts
     this.syncSelectedIndex()

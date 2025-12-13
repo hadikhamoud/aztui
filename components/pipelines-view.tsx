@@ -8,12 +8,11 @@ function getStepStatusDisplay(step: BuildStep): { icon: string; color: string } 
   if (step.state === 'inProgress') {
     return { icon: '⟳', color: '#FFD700' } // Yellow for in progress
   }
-  
+
   if (step.state === 'pending') {
     return { icon: '○', color: '#888888' } // Gray for pending
   }
-  
-  // Completed - check result
+
   switch (step.result) {
     case 'succeeded':
       return { icon: '✓', color: '#00FF00' } // Green
@@ -36,7 +35,7 @@ function formatDuration(start?: Date, finish?: Date): string {
   const seconds = Math.floor(ms / 1000)
   const minutes = Math.floor(seconds / 60)
   const remainingSeconds = seconds % 60
-  
+
   if (minutes > 0) {
     return `${minutes}m ${remainingSeconds}s`
   }
@@ -47,22 +46,22 @@ function StepRow({ step, indent = 0, showDetails = false, isSelected = false }: 
   const { icon, color } = getStepStatusDisplay(step)
   const duration = formatDuration(step.startTime, step.finishTime)
   const indentStr = '  '.repeat(indent)
-  
+
   // Show percentage for in-progress steps
   const progress = step.state === 'inProgress' && step.percentComplete !== undefined
     ? ` (${step.percentComplete}%)`
     : ''
-  
+
   // Show error/warning counts if any
   const issueCounts = []
   if (step.errorCount && step.errorCount > 0) issueCounts.push(`${step.errorCount} errors`)
   if (step.warningCount && step.warningCount > 0) issueCounts.push(`${step.warningCount} warnings`)
   const issueCountStr = issueCounts.length > 0 ? ` [${issueCounts.join(', ')}]` : ''
-  
+
   // Selection indicator
   const selectionIndicator = isSelected ? '▶ ' : '  '
   const textColor = step.state === 'inProgress' ? '#FFD700' : isSelected ? '#00BFFF' : undefined
-  
+
   return (
     <box flexDirection="column">
       <box flexDirection="row" gap={1}>
@@ -73,18 +72,18 @@ function StepRow({ step, indent = 0, showDetails = false, isSelected = false }: 
         {duration && <text fg="#888888">({duration})</text>}
         {issueCountStr && <text fg={step.errorCount ? '#FF4444' : '#FFA500'}>{issueCountStr}</text>}
       </box>
-      
+
       {/* Show current operation for in-progress steps */}
       {step.state === 'inProgress' && step.currentOperation && (
         <text fg="#888888">{indentStr}      ↳ {step.currentOperation}</text>
       )}
-      
+
       {/* Show issue messages (errors/warnings) when showDetails is true */}
       {showDetails && step.issues && step.issues.length > 0 && (
         <box flexDirection="column">
           {step.issues.slice(0, 5).map((issue, idx) => (
-            <text 
-              key={idx} 
+            <text
+              key={idx}
               fg={issue.type === 'error' ? '#FF4444' : '#FFA500'}
             >
               {indentStr}      {issue.type === 'error' ? '✗' : '⚠'} {issue.message.slice(0, 100)}{issue.message.length > 100 ? '...' : ''}
@@ -145,7 +144,7 @@ export function PipelinesView() {
     const { icon, color } = getStepStatusDisplay(selectedStep)
     const duration = formatDuration(selectedStep.startTime, selectedStep.finishTime)
     const visibleLogs = stepLogs.slice(stepLogsScrollOffset, stepLogsScrollOffset + 30)
-    
+
     return (
       <box flexDirection="column" gap={1}>
         <box flexDirection="row" gap={2}>
@@ -156,7 +155,7 @@ export function PipelinesView() {
             <text fg="#FFD700">[IN PROGRESS]</text>
           )}
         </box>
-        
+
         {stepLogsLoading ? (
           <text fg="#888888">Loading logs...</text>
         ) : stepLogs.length === 0 ? (
@@ -195,7 +194,7 @@ export function PipelinesView() {
     const stages = pipelineSteps.filter(s => s.type === 'Stage')
     const jobs = pipelineSteps.filter(s => s.type === 'Job')
     const tasks = pipelineSteps.filter(s => s.type === 'Task')
-    
+
     return (
       <box flexDirection="column" gap={1}>
         <box flexDirection="row" gap={2}>
@@ -210,7 +209,7 @@ export function PipelinesView() {
         </box>
         <text fg="#888888">Branch: {selectedPipelineRun.description}</text>
         <text fg="#888888">Press Enter on a task to view logs, j/k to navigate</text>
-        
+
         {pipelineStepsLoading && pipelineSteps.length === 0 ? (
           <text fg="#888888">Loading steps...</text>
         ) : pipelineSteps.length === 0 ? (
@@ -222,7 +221,7 @@ export function PipelinesView() {
               {(() => {
                 // Track task index across all rendering paths
                 let taskIndex = 0;
-                
+
                 if (stages.length > 0) {
                   // Show hierarchical view with stages
                   return stages.map(stage => {
@@ -298,7 +297,7 @@ export function PipelinesView() {
         <text attributes={TextAttributes.BOLD}>
           Pipeline: {selectedPipeline.name}
         </text>
-        
+
         {pipelineRunsLoading ? (
           <text fg="#888888">Loading runs...</text>
         ) : pipelineRuns.length === 0 ? (
@@ -306,8 +305,8 @@ export function PipelinesView() {
         ) : (
           <box flexDirection="column">
             <text fg="#888888">Recent Runs (Enter to view steps):</text>
-            <Select 
-              options={pipelineRuns} 
+            <Select
+              options={pipelineRuns}
               focused={isFocused}
               onSelect={handleRunSelect}
             />
@@ -323,15 +322,15 @@ export function PipelinesView() {
       <text attributes={TextAttributes.BOLD}>
         Build Pipelines for: {selectedRepo?.name}
       </text>
-      
+
       {pipelinesLoading ? (
         <text fg="#888888">Loading pipelines...</text>
       ) : pipelines.length === 0 ? (
         <text fg="#888888">No pipelines found for this repository</text>
       ) : (
-        <Select 
-          options={pipelines} 
-          focused={isFocused} 
+        <Select
+          options={pipelines}
+          focused={isFocused}
           value={undefined}
           onSelect={handlePipelineSelect}
         />
