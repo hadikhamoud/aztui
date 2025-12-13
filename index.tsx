@@ -1,7 +1,7 @@
-import { createCliRenderer } from "@opentui/core"
-import { useKeyboard, createRoot } from "@opentui/react"
+import { createCliRenderer, PasteEvent } from "@opentui/core"
+import { useKeyboard, createRoot, useAppContext } from "@opentui/react"
 import { useTerminalDimensions } from "@opentui/react"
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useRef } from "react"
 import { useAppStore } from "./store/app-store"
 import { ProjectBox } from "./components/project-box"
 import { RepoBox } from "./components/repo-box"
@@ -55,7 +55,11 @@ function App() {
       }
       
       // Handle typed characters and pasted text (sequence can be multiple characters on paste)
-      if (key.sequence && !key.ctrl && !key.meta && key.name !== 'escape') {
+      if (key.sequence && key.name !== 'escape') {
+        // Skip control key combos (Ctrl+C, Cmd+Q, etc.) but not multi-char sequences (paste)
+        if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+          return
+        }
         // Filter out control characters but allow printable characters
         const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
         if (printable.length > 0) {
@@ -97,9 +101,16 @@ function App() {
         return
       }
 
-      if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
-        state.setSearchQuery(state.searchQuery + key.sequence)
-        return
+      // Handle typed characters and pasted text
+      if (key.sequence && key.name !== 'escape') {
+        if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+          return
+        }
+        const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+        if (printable.length > 0) {
+          state.setSearchQuery(state.searchQuery + printable)
+          return
+        }
       }
 
       return
@@ -130,9 +141,16 @@ function App() {
           state.setCloneLocation(state.cloneLocation.slice(0, -1))
           return
         }
-        if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
-          state.setCloneLocation(state.cloneLocation + key.sequence)
-          return
+        // Handle typed characters and pasted text
+        if (key.sequence && key.name !== 'escape') {
+          if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+            return
+          }
+          const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+          if (printable.length > 0) {
+            state.setCloneLocation(state.cloneLocation + printable)
+            return
+          }
         }
       }
       
@@ -230,13 +248,20 @@ function App() {
           state.setCommentText(state.commentText.slice(0, -1))
           return
         }
-        if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
-          state.setCommentText(state.commentText + key.sequence)
-          return
-        }
         if (key.name === "return") {
           state.setCommentText(state.commentText + '\n')
           return
+        }
+        // Handle typed characters and pasted text
+        if (key.sequence && key.name !== 'escape') {
+          if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+            return
+          }
+          const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+          if (printable.length > 0) {
+            state.setCommentText(state.commentText + printable)
+            return
+          }
         }
         return
       }
@@ -255,13 +280,20 @@ function App() {
           state.setCompletionMessage(state.completionMessage.slice(0, -1))
           return
         }
-        if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
-          state.setCompletionMessage(state.completionMessage + key.sequence)
-          return
-        }
         if (key.name === "return") {
           state.setCompletionMessage(state.completionMessage + '\n')
           return
+        }
+        // Handle typed characters and pasted text
+        if (key.sequence && key.name !== 'escape') {
+          if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+            return
+          }
+          const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+          if (printable.length > 0) {
+            state.setCompletionMessage(state.completionMessage + printable)
+            return
+          }
         }
         return
       }
@@ -403,6 +435,57 @@ function App() {
       }
     }
   })
+
+  // Handle paste events (Cmd+V on macOS, Ctrl+V on Linux/Windows)
+  const { keyHandler } = useAppContext()
+  useEffect(() => {
+    if (!keyHandler) return
+    
+    const handlePaste = (event: PasteEvent) => {
+      const state = useAppStore.getState()
+      const text = event.text
+      
+      // Handle paste in setup mode
+      if (state.needsSetup) {
+        if (state.setupFocusedField === 'orgUrl') {
+          state.setSetupOrgUrl(state.setupOrgUrl + text)
+        } else {
+          state.setSetupPat(state.setupPat + text)
+        }
+        return
+      }
+      
+      // Handle paste in search
+      if (state.isSearchActive) {
+        state.setSearchQuery(state.searchQuery + text)
+        return
+      }
+      
+      // Handle paste in clone view
+      if (state.isInCloneView && state.focusedBox === 'workspace' && state.cloneFocusedField === 'path') {
+        state.setCloneLocation(state.cloneLocation + text)
+        return
+      }
+      
+      // Handle paste in PR comment
+      if (state.isInPRsView && state.isAddingComment) {
+        state.setCommentText(state.commentText + text)
+        return
+      }
+      
+      // Handle paste in PR completion message
+      if (state.isInPRsView && state.isCompletingPR) {
+        state.setCompletionMessage(state.completionMessage + text)
+        return
+      }
+    }
+    
+    const handler = keyHandler as any
+    handler.on("paste", handlePaste)
+    return () => {
+      handler.off("paste", handlePaste)
+    }
+  }, [keyHandler])
 
   // Show setup view if credentials are missing
   if (needsSetup) {
