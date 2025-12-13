@@ -11,22 +11,20 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
+          # Build on native architecture only - cross-compilation doesn't work
+          # with packages that have platform-specific dynamic imports
           - os: ubuntu-latest
-            target: bun-linux-x64
             artifact: aztui-linux-x64
-          - os: ubuntu-latest
-            target: bun-linux-arm64
+          - os: ubuntu-24.04-arm64
             artifact: aztui-linux-arm64
-          - os: macos-latest
-            target: bun-darwin-x64
+          - os: macos-13
             artifact: aztui-darwin-x64
           - os: macos-latest
-            target: bun-darwin-arm64
             artifact: aztui-darwin-arm64
           - os: windows-latest
-            target: bun-windows-x64
             artifact: aztui-windows-x64.exe
 
     runs-on: ${{ matrix.os }}
@@ -44,7 +42,7 @@ jobs:
         run: bun install
 
       - name: Build executable
-        run: bun build ./index.tsx --compile --target=${{ matrix.target }} --outfile ${{ matrix.artifact }}
+        run: bun build ./index.tsx --compile --outfile ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
