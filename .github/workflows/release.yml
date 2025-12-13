@@ -18,7 +18,7 @@ jobs:
           # with packages that have platform-specific dynamic imports
           - os: ubuntu-latest
             artifact: aztui-linux-x64
-          - os: ubuntu-24.04-arm64
+          - os: ubuntu-24.04-arm
             artifact: aztui-linux-arm64
           - os: macos-15-intel
             artifact: aztui-darwin-x64
