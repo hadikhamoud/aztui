@@ -1,6 +1,10 @@
 # AZTUI Rewrite using opentui
 
-### Issues currently facing:
+### Current Features 
+- view projects and repos
+- view pipelines, and runs. (run details work in progress)
+- clone repo in any directory ssh or https
+- view PRs and act on them
+- create PRs
 
-- assigning a select value to the select component. Works, not optimal 
-- working on tab across boxes and managing state within the same box (multiple views)
+install using the install script `install.sh`
