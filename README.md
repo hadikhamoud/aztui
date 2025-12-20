@@ -6,5 +6,7 @@
 - clone repo in any directory ssh or https
 - view PRs and act on them
 - create PRs
+- yank repo links
+- open PRs in browser
 
 install using the install script `install.sh`
