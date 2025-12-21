@@ -67,7 +67,7 @@ function StepRow({ step, indent = 0, showDetails = false, isSelected = false }: 
       <box flexDirection="row" gap={1}>
         <text fg={color}>{indentStr}{selectionIndicator}{icon}</text>
         <text fg={textColor}>
-          {step.name}{progress}
+          {String(step.name || '')}{progress}
         </text>
         {duration && <text fg="#888888">({duration})</text>}
         {issueCountStr && <text fg={step.errorCount ? '#FF4444' : '#FFA500'}>{issueCountStr}</text>}
@@ -152,7 +152,7 @@ export function PipelinesView() {
       <box flexDirection="column" gap={1}>
         <box flexDirection="row" gap={2}>
           <text fg={color}>{icon}</text>
-          <text attributes={TextAttributes.BOLD}>{selectedStep.name}</text>
+          <text attributes={TextAttributes.BOLD}>{String(selectedStep.name || '')}</text>
           {duration && <text fg="#888888">({duration})</text>}
           {selectedStep.state === 'inProgress' && (
             <text fg="#FFD700">[IN PROGRESS]</text>
@@ -203,7 +203,7 @@ export function PipelinesView() {
       <box flexDirection="column" gap={1}>
         <box flexDirection="row" gap={2}>
           <text attributes={TextAttributes.BOLD}>
-            Build: {selectedPipelineRun.name.replace(/^\[(ok|fail|run|queue|warn|cancel)\]\s*/, '')}
+            Build: {String(selectedPipelineRun.name || '').replace(/^\[(ok|fail|run|queue|warn|cancel)\]\s*/, '')}
           </text>
           {isRunInProgress && (
             <text fg="#FFD700" attributes={TextAttributes.BOLD}>
@@ -211,7 +211,7 @@ export function PipelinesView() {
             </text>
           )}
         </box>
-        <text fg="#888888">Branch: {selectedPipelineRun.description}</text>
+        <text fg="#888888">Branch: {String(selectedPipelineRun.description || '')}</text>
         <text fg="#888888">Press Enter on a task to view logs, j/k to navigate</text>
 
         {pipelineStepsLoading && pipelineSteps.length === 0 ? (
@@ -299,7 +299,7 @@ export function PipelinesView() {
     return (
       <box flexDirection="column" gap={1}>
         <text attributes={TextAttributes.BOLD}>
-          Pipeline: {selectedPipeline.name}
+          Pipeline: {String(selectedPipeline.name || '')}
         </text>
 
         {pipelineRunsLoading ? (
@@ -324,7 +324,7 @@ export function PipelinesView() {
   return (
     <box flexDirection="column" gap={1}>
       <text attributes={TextAttributes.BOLD}>
-        Build Pipelines for: {selectedRepo?.name}
+        Build Pipelines for: {String(selectedRepo?.name || '')}
       </text>
 
       {pipelinesLoading ? (

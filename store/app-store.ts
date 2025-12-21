@@ -941,9 +941,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
         
         return {
-          name: `[${statusIcon}] #${build.buildNumber} - ${statusText}`,
+          name: `[${statusIcon}] #${String(build.buildNumber || '')} - ${statusText}`,
           value: `${build.id}`,
-          description: build.sourceBranch || ''
+          description: String(build.sourceBranch || '')
         }
       }) || []
       set({ pipelineRuns: options, pipelineRunsLoading: false })
