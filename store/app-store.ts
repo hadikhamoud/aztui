@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SelectOption } from '@opentui/core'
-import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, type BuildStep, type DetectedRepo } from '../api'
+import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getBuildRunUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, type BuildStep, type DetectedRepo } from '../api'
 import { hasCredentials, saveConfig, getCredentials } from '../config'
 
 export interface PRFileChange {
@@ -162,6 +162,7 @@ interface AppStore {
   loadStepLogs: (step: BuildStep) => Promise<void>
   scrollLogs: (direction: 'up' | 'down' | 'pageup' | 'pagedown') => void
   exitStepLogs: () => void
+  openBuildRunInBrowser: () => void
 
   // Pull Requests functionality
   isInPRsView: boolean
@@ -1080,6 +1081,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   exitStepLogs: () => {
     set({ selectedStep: null, stepLogs: [], stepLogsScrollOffset: 0, selectedStepIndex: 0 })
+  },
+  openBuildRunInBrowser: () => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedPipelineRun) return
+    
+    const buildId = parseInt(state.selectedPipelineRun.value)
+    const url = getBuildRunUrl(state.selectedProject.name, buildId)
+    
+    // Open URL in default browser
+    const { exec } = require('child_process')
+    const platform = process.platform
+    const command = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open'
+    exec(`${command} "${url}"`)
   },
 
   // Pull Requests functionality

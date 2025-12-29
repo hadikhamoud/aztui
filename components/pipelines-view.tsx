@@ -1,3 +1,4 @@
+import React from "react"
 import { useAppStore } from "../store/app-store"
 import { Select } from "./select"
 import { TextAttributes } from "@opentui/core"
@@ -198,6 +199,21 @@ export function PipelinesView() {
     const stages = pipelineSteps.filter(s => s.type === 'Stage')
     const jobs = pipelineSteps.filter(s => s.type === 'Job')
     const tasks = pipelineSteps.filter(s => s.type === 'Task')
+    
+    // Build a map of parent IDs to check hierarchy
+    const stageIds = new Set(stages.map(s => s.id))
+    const jobIds = new Set(jobs.map(j => j.id))
+    
+    // Find orphan jobs (jobs without a stage parent or with invalid parent)
+    const orphanJobs = jobs.filter(j => !j.parentId || !stageIds.has(j.parentId))
+    
+    // Find orphan tasks (tasks without a job parent or with invalid parent)
+    const orphanTasks = tasks.filter(t => !t.parentId || !jobIds.has(t.parentId))
+    
+    // Other step types (Checkpoint, Phase, etc.)
+    const otherSteps = pipelineSteps.filter(s => 
+      s.type !== 'Stage' && s.type !== 'Job' && s.type !== 'Task'
+    )
 
     return (
       <box flexDirection="column" gap={1}>
@@ -212,7 +228,7 @@ export function PipelinesView() {
           )}
         </box>
         <text fg="#888888">Branch: {String(selectedPipelineRun.description || '')}</text>
-        <text fg="#888888">Press Enter on a task to view logs, j/k to navigate</text>
+        <text fg="#888888">Press Enter on a task to view logs, j/k to navigate, o to open in browser</text>
 
         {pipelineStepsLoading && pipelineSteps.length === 0 ? (
           <text fg="#888888">Loading steps...</text>
@@ -225,13 +241,14 @@ export function PipelinesView() {
               {(() => {
                 // Track task index across all rendering paths
                 let taskIndex = 0;
+                const elements: React.ReactNode[] = [];
 
                 if (stages.length > 0) {
                   // Show hierarchical view with stages
-                  return stages.map(stage => {
+                  stages.forEach(stage => {
                     const stageJobs = jobs.filter(j => j.parentId === stage.id)
                     const showStageDetails = stage.result === 'failed' || stage.state === 'inProgress'
-                    return (
+                    elements.push(
                       <box key={stage.id} flexDirection="column">
                         <StepRow step={stage} indent={0} showDetails={showStageDetails} />
                         {stageJobs.map(job => {
@@ -254,12 +271,12 @@ export function PipelinesView() {
                       </box>
                     )
                   })
-                } else if (jobs.length > 0) {
-                  // No stages, show jobs with their tasks
-                  return jobs.map(job => {
+                  
+                  // Show orphan jobs (jobs not under any stage)
+                  orphanJobs.forEach(job => {
                     const jobTasks = tasks.filter(t => t.parentId === job.id)
                     const showJobDetails = job.result === 'failed' || job.state === 'inProgress'
-                    return (
+                    elements.push(
                       <box key={job.id} flexDirection="column">
                         <StepRow step={job} indent={0} showDetails={showJobDetails} />
                         {jobTasks.map(task => {
@@ -273,16 +290,57 @@ export function PipelinesView() {
                       </box>
                     )
                   })
-                } else {
-                  // Just tasks
-                  return tasks.map((task, idx) => {
+                } else if (jobs.length > 0) {
+                  // No stages, show jobs with their tasks
+                  jobs.forEach(job => {
+                    const jobTasks = tasks.filter(t => t.parentId === job.id)
+                    const showJobDetails = job.result === 'failed' || job.state === 'inProgress'
+                    elements.push(
+                      <box key={job.id} flexDirection="column">
+                        <StepRow step={job} indent={0} showDetails={showJobDetails} />
+                        {jobTasks.map(task => {
+                          const currentTaskIndex = taskIndex++
+                          const showTaskDetails = task.result === 'failed' || task.state === 'inProgress'
+                          const isSelected = currentTaskIndex === selectedStepIndex
+                          return (
+                            <StepRow key={task.id} step={task} indent={1} showDetails={showTaskDetails} isSelected={isSelected} />
+                          )
+                        })}
+                      </box>
+                    )
+                  })
+                }
+                
+                // Show orphan tasks (tasks not under any job)
+                orphanTasks.forEach((task, idx) => {
+                  const currentTaskIndex = taskIndex++
+                  const showTaskDetails = task.result === 'failed' || task.state === 'inProgress'
+                  const isSelected = currentTaskIndex === selectedStepIndex
+                  elements.push(
+                    <StepRow key={task.id} step={task} indent={0} showDetails={showTaskDetails} isSelected={isSelected} />
+                  )
+                })
+                
+                // Show other step types
+                otherSteps.forEach(step => {
+                  const showDetails = step.result === 'failed' || step.state === 'inProgress'
+                  elements.push(
+                    <StepRow key={step.id} step={step} indent={0} showDetails={showDetails} />
+                  )
+                })
+                
+                // If no structured elements, just show all tasks flat
+                if (elements.length === 0 && tasks.length > 0) {
+                  tasks.forEach((task, idx) => {
                     const showTaskDetails = task.result === 'failed' || task.state === 'inProgress'
                     const isSelected = idx === selectedStepIndex
-                    return (
+                    elements.push(
                       <StepRow key={task.id} step={task} indent={0} showDetails={showTaskDetails} isSelected={isSelected} />
                     )
                   })
                 }
+
+                return elements
               })()}
             </box>
             {isRunInProgress && (

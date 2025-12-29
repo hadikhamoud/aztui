@@ -208,8 +208,9 @@ export async function getBuildTimeline(projectId: string, buildId: number): Prom
   if (!timeline?.records) return [];
   
   // Map timeline records to our BuildStep interface
+  // Include all record types to ensure we don't miss any steps
   const steps: BuildStep[] = timeline.records
-    .filter(record => record.type === 'Stage' || record.type === 'Job' || record.type === 'Task')
+    .filter(record => record.type && record.name) // Filter out records without type or name
     .map(record => {
       // State: 0 = pending, 1 = inProgress, 2 = completed
       let state: 'pending' | 'inProgress' | 'completed' = 'pending';
@@ -559,6 +560,12 @@ export function getPullRequestUrl(projectName: string, repositoryName: string, p
   // Azure DevOps PR URL format: https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{prId}
   const org = orgUrl.replace('https://dev.azure.com/', '').replace(/\/$/, '');
   return `https://dev.azure.com/${org}/${encodeURIComponent(projectName)}/_git/${encodeURIComponent(repositoryName)}/pullrequest/${pullRequestId}`;
+}
+
+export function getBuildRunUrl(projectName: string, buildId: number): string {
+  // Azure DevOps Build URL format: https://dev.azure.com/{org}/{project}/_build/results?buildId={buildId}
+  const org = orgUrl.replace('https://dev.azure.com/', '').replace(/\/$/, '');
+  return `https://dev.azure.com/${org}/${encodeURIComponent(projectName)}/_build/results?buildId=${buildId}`;
 }
 
 // Get detailed PR info including isDraft

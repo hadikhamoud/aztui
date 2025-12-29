@@ -39,7 +39,7 @@ export function Controls() {
         return "j/k: Scroll logs | Ctrl+d/u: Page down/up | Esc: Back to steps"
       }
       if (selectedPipelineRun) {
-        return "j/k: Navigate steps | Enter: View logs | Esc: Back to runs"
+        return "j/k: Navigate steps | Enter: View logs | O: Open in browser | Esc: Back to runs"
       }
       if (selectedPipeline) {
         return "Enter: View steps | Esc: Back to pipelines | Arrow Keys: Navigate"

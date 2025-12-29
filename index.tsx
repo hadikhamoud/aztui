@@ -219,6 +219,10 @@ function App() {
           state.goBackFromSteps()
           return
         }
+        if (key.name === "o") {
+          state.openBuildRunInBrowser()
+          return
+        }
         if (key.name === "j" || key.name === "down") {
           state.navigateStep('down')
           return
