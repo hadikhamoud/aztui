@@ -1,4 +1,6 @@
-# AZTUI Rewrite using opentui
+# AZTUI
+
+## Azure Devops Terminal Utility (opentui)
 
 ### Current Features 
 - view projects and repos
