@@ -520,9 +520,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   // Workspace functionality
   workspaceOptions: [
-    { name: "clone repo", value: "clone", description: "" },
     { name: "build pipelines", value: "pipelines", description: "" },
-    { name: "pull requests", value: "prs", description: "" }
+    { name: "pull requests", value: "prs", description: "" },
+    { name: "repository", value: "clone", description: "" }
   ],
   selectedWorkspaceOption: null,
   lastSelectedWorkspaceIndex: 0,
@@ -889,6 +889,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }))
       
       set({ pipelines: options, pipelinesLoading: false })
+      
+      // If there's only one pipeline, automatically select it
+      if (options.length === 1) {
+        const pipeline = options[0]
+        set({ selectedPipeline: pipeline, pipelineRuns: [], selectedPipelineRun: null })
+        get().loadPipelineRuns(parseInt(pipeline.value))
+      }
     } catch (error) {
       console.error('Failed to load pipelines:', error)
       set({ pipelinesLoading: false })
