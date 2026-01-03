@@ -1,5 +1,7 @@
+import { useCallback } from "react"
 import { useAppStore } from "../store/app-store"
 import { TextAttributes } from "@opentui/core"
+import { Toast } from "./toast"
 
 export function CloneView() {
   const {
@@ -7,8 +9,13 @@ export function CloneView() {
     cloneLocation,
     cloneMethod,
     cloneStatus,
-    cloneFocusedField
+    cloneFocusedField,
+    clearCloneStatus
   } = useAppStore()
+
+  const handleToastDismiss = useCallback(() => {
+    clearCloneStatus()
+  }, [clearCloneStatus])
 
   const getRepoUrl = () => {
     if (!selectedRepo) return ''
@@ -56,17 +63,12 @@ export function CloneView() {
         <text fg="#888888">Leave empty to clone to current directory</text>
       </box>
 
-      {cloneStatus && (
-        <box 
-          borderStyle="rounded" 
-          borderColor={cloneStatus.isError ? 'red' : 'green'}
-          padding={0.5}
-        >
-          <text fg={cloneStatus.isError ? 'red' : 'green'}>
-            {cloneStatus.message}
-          </text>
-        </box>
-      )}
+      <Toast 
+        message={cloneStatus?.message ?? null}
+        isError={cloneStatus?.isError}
+        duration={3000}
+        onDismiss={handleToastDismiss}
+      />
     </box>
   )
 }

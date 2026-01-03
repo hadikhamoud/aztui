@@ -1,8 +1,10 @@
+import { useCallback } from "react"
 import { Logo } from "./logo"
 import { Select } from "./select"
 import { CloneView } from "./clone-view"
 import { PipelinesView } from "./pipelines-view"
 import { PRsView } from "./prs-view"
+import { Toast } from "./toast"
 import { useAppStore } from "../store/app-store"
 import { useTerminalDimensions } from "@opentui/react"
 
@@ -26,8 +28,14 @@ export function WorkspaceBox() {
     isInPRsView,
     enterCloneView,
     enterPipelinesView,
-    enterPRsView
+    enterPRsView,
+    repoActionStatus,
+    clearRepoActionStatus
   } = useAppStore()
+  
+  const handleToastDismiss = useCallback(() => {
+    clearRepoActionStatus()
+  }, [clearRepoActionStatus])
 
   const isFocused = focusedBox === 'workspace'
   const displayOptions = isFocused ? getFilteredOptions('workspace') : workspaceOptions
@@ -118,6 +126,12 @@ export function WorkspaceBox() {
       <box flexDirection="column">
         {renderContent()}
       </box>
+      <Toast 
+        message={repoActionStatus?.message ?? null}
+        isError={repoActionStatus?.isError}
+        duration={3000}
+        onDismiss={handleToastDismiss}
+      />
     </box>
   )
 }

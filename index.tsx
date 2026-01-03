@@ -664,6 +664,23 @@ function App() {
         state.exitWorkspace()
       }
     }
+    
+    // Repo shortcuts (available when in workspace but not in a specific view)
+    if (state.focusedBox === "workspace" && state.isInWorkspace && 
+        !state.isInCloneView && !state.isInPRsView && !state.isInPipelinesView) {
+      if (key.name === "o") {
+        state.openRepoInBrowser()
+        return
+      }
+      if (key.name === "y" && !key.ctrl) {
+        state.copyRepoHttpsLink()
+        return
+      }
+      if (key.name === "y" && key.ctrl) {
+        state.copyRepoSshLink()
+        return
+      }
+    }
   })
 
   // Handle paste events (Cmd+V on macOS, Ctrl+V on Linux/Windows)

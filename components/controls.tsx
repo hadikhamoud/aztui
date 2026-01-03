@@ -71,7 +71,7 @@ export function Controls() {
     }
     
     if (isInWorkspace) {
-      return "Enter: Select option | Esc: Back to repos | Tab: Navigate | Arrow Keys: Move selection | /: Search"
+      return "Enter: Select | O: Open in browser | Y: Copy HTTPS | Ctrl+Y: Copy SSH | Esc: Back | /: Search"
     }
     
     if (focusedBox === 'projects') {

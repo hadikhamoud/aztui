@@ -83,6 +83,13 @@ interface AppStore {
   setRepos: (repos: SelectOption[]) => void
   selectRepo: (repo: SelectOption, index: number) => void
   loadRepos: (projectId: string) => Promise<void>
+  
+  // Repo actions
+  repoActionStatus: { message: string; isError: boolean } | null
+  openRepoInBrowser: () => void
+  copyRepoHttpsLink: () => void
+  copyRepoSshLink: () => void
+  clearRepoActionStatus: () => void
 
   // Auto-detect from cwd
   detectedRepo: DetectedRepo | null
@@ -435,6 +442,123 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (error) {
       console.error('Failed to load repos:', error)
     }
+  },
+  
+  // Repo actions
+  repoActionStatus: null,
+  
+  openRepoInBrowser: () => {
+    const state = get()
+    if (!state.selectedRepo) return
+    
+    try {
+      const urlData = JSON.parse(state.selectedRepo.description)
+      const url = urlData.httpsUrl || urlData.webUrl
+      
+      if (!url) {
+        set({ repoActionStatus: { message: 'No URL available for this repo', isError: true } })
+        setTimeout(() => set({ repoActionStatus: null }), 3000)
+        return
+      }
+      
+      // Open URL in default browser
+      const { exec } = require('child_process')
+      const platform = process.platform
+      const command = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open'
+      exec(`${command} "${url}"`)
+      
+      set({ repoActionStatus: { message: 'Opening repo in browser...', isError: false } })
+      setTimeout(() => set({ repoActionStatus: null }), 3000)
+    } catch {
+      set({ repoActionStatus: { message: 'Failed to get repo URL', isError: true } })
+      setTimeout(() => set({ repoActionStatus: null }), 3000)
+    }
+  },
+  
+  copyRepoHttpsLink: () => {
+    const state = get()
+    if (!state.selectedRepo) return
+    
+    try {
+      const urlData = JSON.parse(state.selectedRepo.description)
+      const url = urlData.httpsUrl
+      
+      if (!url) {
+        set({ repoActionStatus: { message: 'No HTTPS URL available', isError: true } })
+        setTimeout(() => set({ repoActionStatus: null }), 3000)
+        return
+      }
+      
+      // Copy to clipboard using platform-specific command
+      const { exec } = require('child_process')
+      const platform = process.platform
+      
+      let command: string
+      if (platform === 'darwin') {
+        command = `echo "${url}" | pbcopy`
+      } else if (platform === 'win32') {
+        command = `echo ${url} | clip`
+      } else {
+        command = `echo "${url}" | xclip -selection clipboard 2>/dev/null || echo "${url}" | xsel --clipboard`
+      }
+      
+      exec(command, (error: Error | null) => {
+        if (error) {
+          set({ repoActionStatus: { message: 'Failed to copy to clipboard', isError: true } })
+        } else {
+          set({ repoActionStatus: { message: 'HTTPS link copied to clipboard!', isError: false } })
+        }
+        setTimeout(() => set({ repoActionStatus: null }), 3000)
+      })
+    } catch {
+      set({ repoActionStatus: { message: 'Failed to get repo URL', isError: true } })
+      setTimeout(() => set({ repoActionStatus: null }), 3000)
+    }
+  },
+  
+  copyRepoSshLink: () => {
+    const state = get()
+    if (!state.selectedRepo) return
+    
+    try {
+      const urlData = JSON.parse(state.selectedRepo.description)
+      const url = urlData.sshUrl
+      
+      if (!url) {
+        set({ repoActionStatus: { message: 'No SSH URL available', isError: true } })
+        setTimeout(() => set({ repoActionStatus: null }), 3000)
+        return
+      }
+      
+      // Copy to clipboard using platform-specific command
+      const { exec } = require('child_process')
+      const platform = process.platform
+      
+      let command: string
+      if (platform === 'darwin') {
+        command = `echo "${url}" | pbcopy`
+      } else if (platform === 'win32') {
+        command = `echo ${url} | clip`
+      } else {
+        command = `echo "${url}" | xclip -selection clipboard 2>/dev/null || echo "${url}" | xsel --clipboard`
+      }
+      
+      exec(command, (error: Error | null) => {
+        if (error) {
+          set({ repoActionStatus: { message: 'Failed to copy to clipboard', isError: true } })
+        } else {
+          set({ repoActionStatus: { message: 'SSH link copied to clipboard!', isError: false } })
+        }
+        setTimeout(() => set({ repoActionStatus: null }), 3000)
+      })
+    } catch {
+      set({ repoActionStatus: { message: 'Failed to get repo URL', isError: true } })
+      setTimeout(() => set({ repoActionStatus: null }), 3000)
+    }
+  },
+  
+  clearRepoActionStatus: () => {
+    set({ repoActionStatus: null })
   },
 
   // Auto-detect from cwd
@@ -823,6 +947,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
       } catch {
         // Fallback to description as URL if parsing fails
         repoUrl = state.selectedRepo.description
+      }
+      
+      // For HTTPS, inject PAT into the URL for authentication
+      if (state.cloneMethod === 'https' && repoUrl.startsWith('https://')) {
+        const credentials = getCredentials()
+        if (credentials?.pat) {
+          // Transform https://dev.azure.com/... to https://{pat}@dev.azure.com/...
+          repoUrl = repoUrl.replace('https://', `https://${credentials.pat}@`)
+        }
       }
       
       const result = await cloneRepo(repoUrl, state.cloneLocation.trim())
