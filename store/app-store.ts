@@ -46,6 +46,10 @@ export interface PRConflict {
 type FocusedBox = 'projects' | 'repos' | 'workspace'
 
 interface AppStore {
+  // Pending view to open after initialization (from CLI commands)
+  pendingView: 'prs' | 'pipelines' | null
+  clearPendingView: () => void
+
   // Setup state (shown when credentials are missing)
   needsSetup: boolean
   setupOrgUrl: string
@@ -267,6 +271,10 @@ interface AppStore {
 const focusOrder: FocusedBox[] = ['projects', 'repos', 'workspace']
 
 export const useAppStore = create<AppStore>((set, get) => ({
+  // Pending view from CLI commands
+  pendingView: null,
+  clearPendingView: () => set({ pendingView: null }),
+
   // Setup state
   needsSetup: !hasCredentials(),
   setupOrgUrl: '',
@@ -451,78 +459,112 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     set({ detectedRepo: detected })
     
-    // Load projects first
-    try {
-      const projects = await getProjects()
-      const projectOptions = projects?.map(p => ({
-        name: `${p.name}`,
-        value: `${p.id}`,
-        description: `${p.id}`,
-      })) || []
-      set({ projects: projectOptions })
-      
-      // Find the matching project (case-insensitive)
-      const matchingProject = projectOptions.find(
-        p => p.name.toLowerCase() === detected.project.toLowerCase()
-      )
-      
-      if (!matchingProject) {
-        set({ isInitializingFromCwd: false })
-        return
-      }
-      
-      // Select the project
-      const projectIndex = projectOptions.findIndex(p => p.value === matchingProject.value)
-      set({ 
-        selectedProject: matchingProject, 
-        selectedProjectIndex: projectIndex,
-        lastSelectedProjectIndex: projectIndex
-      })
-      
-      // Load repos for this project
-      const repos = await getRepos(matchingProject.value)
-      const repoOptions = repos?.map(r => ({
-        name: `${r.name}`,
-        value: `${r.id}`,
-        description: JSON.stringify({
-          httpsUrl: (r as any).cloneUrl || r.webUrl,
-          sshUrl: (r as any).sshUrl || `git@ssh.dev.azure.com:v3/${matchingProject.name}/${matchingProject.name}/${r.name}`
-        }),
-      })) || []
-      set({ repos: repoOptions })
-      
-      // Find the matching repo (case-insensitive)
-      const matchingRepo = repoOptions.find(
-        r => r.name.toLowerCase() === detected.repoName.toLowerCase()
-      )
-      
-      if (!matchingRepo) {
-        set({ isInitializingFromCwd: false })
-        return
-      }
-      
-      // Select the repo
-      const repoIndex = repoOptions.findIndex(r => r.value === matchingRepo.value)
-      set({ 
-        selectedRepo: matchingRepo, 
-        selectedRepoIndex: repoIndex,
-        lastSelectedRepoIndex: repoIndex
-      })
-      
-      // Enter workspace
-      set({ isInWorkspace: true, focusedBox: 'workspace', isInitializingFromCwd: false })
-      
-    } catch (error) {
-      // Silently fail - user can still manually select project/repo
-      set({ isInitializingFromCwd: false })
+    // Create placeholder project/repo from detected info and go to workspace IMMEDIATELY
+    // We have all the info we need from the git remote URL
+    const placeholderProject = {
+      name: detected.project,
+      value: '', // Will be filled when API loads
+      description: ''
     }
+    const placeholderRepo = {
+      name: detected.repoName,
+      value: '', // Will be filled when API loads
+      description: ''
+    }
+    
+    set({
+      selectedProject: placeholderProject,
+      selectedProjectIndex: 0,
+      lastSelectedProjectIndex: 0,
+      selectedRepo: placeholderRepo,
+      selectedRepoIndex: 0,
+      lastSelectedRepoIndex: 0,
+      isInWorkspace: true,
+      focusedBox: 'workspace'
+    })
+    
+    // Check if there's a pending view to open - do this IMMEDIATELY
+    const pendingView = get().pendingView
+    if (pendingView === 'prs') {
+      get().enterPRsView()
+      set({ pendingView: null })
+    } else if (pendingView === 'pipelines') {
+      get().enterPipelinesView()
+      set({ pendingView: null })
+    }
+    
+    // Load projects/repos in background - don't await, let it run independently
+    ;(async () => {
+      try {
+        const projects = await getProjects()
+        const projectOptions = projects?.map(p => ({
+          name: `${p.name}`,
+          value: `${p.id}`,
+          description: `${p.id}`,
+        })) || []
+        set({ projects: projectOptions })
+        
+        // Find the matching project (case-insensitive)
+        const matchingProject = projectOptions.find(
+          p => p.name.toLowerCase() === detected.project.toLowerCase()
+        )
+        
+        if (matchingProject) {
+          const projectIndex = projectOptions.findIndex(p => p.value === matchingProject.value)
+          set({ 
+            selectedProject: matchingProject, 
+            selectedProjectIndex: projectIndex,
+            lastSelectedProjectIndex: projectIndex
+          })
+          
+          // Load repos for this project
+          const repos = await getRepos(matchingProject.value)
+          const repoOptions = repos?.map(r => ({
+            name: `${r.name}`,
+            value: `${r.id}`,
+            description: JSON.stringify({
+              httpsUrl: (r as any).cloneUrl || r.webUrl,
+              sshUrl: (r as any).sshUrl || `git@ssh.dev.azure.com:v3/${matchingProject.name}/${matchingProject.name}/${r.name}`
+            }),
+          })) || []
+          set({ repos: repoOptions })
+          
+          // Find the matching repo (case-insensitive)
+          const matchingRepo = repoOptions.find(
+            r => r.name.toLowerCase() === detected.repoName.toLowerCase()
+          )
+          
+          if (matchingRepo) {
+            const repoIndex = repoOptions.findIndex(r => r.value === matchingRepo.value)
+            set({ 
+              selectedRepo: matchingRepo, 
+              selectedRepoIndex: repoIndex,
+              lastSelectedRepoIndex: repoIndex
+            })
+            
+            // If we're in a view that needs real IDs, reload it now that we have them
+            const currentState = get()
+            if (currentState.isInPRsView) {
+              currentState.loadPullRequests()
+            } else if (currentState.isInPipelinesView) {
+              currentState.loadPipelines()
+            }
+          }
+        }
+        
+        set({ isInitializingFromCwd: false })
+      } catch (error) {
+        // Silently fail - user is already in workspace
+        set({ isInitializingFromCwd: false })
+      }
+    })()
   },
 
   // Workspace functionality
   workspaceOptions: [
     { name: "build pipelines", value: "pipelines", description: "" },
     { name: "pull requests", value: "prs", description: "" },
-    { name: "repository", value: "clone", description: "" }
+    { name: "clone repository", value: "clone", description: "" }
   ],
   selectedWorkspaceOption: null,
   lastSelectedWorkspaceIndex: 0,
@@ -869,7 +911,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   loadPipelines: async () => {
     const state = get()
-    if (!state.selectedProject || !state.selectedRepo) return
+    // Need project with valid ID (not just placeholder)
+    if (!state.selectedProject?.value || !state.selectedRepo) return
     
     set({ pipelinesLoading: true })
     try {
@@ -1177,7 +1220,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   loadPullRequests: async () => {
     const state = get()
-    if (!state.selectedProject || !state.selectedRepo) return
+    // Need both project and repo with valid IDs (not just placeholders)
+    if (!state.selectedProject?.value || !state.selectedRepo?.value) return
     
     set({ prsLoading: true })
     try {
@@ -2038,11 +2082,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 }))
 
-// Auto-initialize from CWD when the store is created (before React renders)
-// This runs synchronously during module load
-if (hasCredentials()) {
-  // Set the flag synchronously first
-  useAppStore.setState({ isInitializingFromCwd: true })
-  // Then run the async initialization
-  useAppStore.getState().initializeFromCwd()
+// Auto-initialize from CWD - exported so index.tsx can call it after processing CLI args
+export function autoInitialize() {
+  if (hasCredentials() && !useAppStore.getState().needsSetup) {
+    // Set the flag synchronously first
+    useAppStore.setState({ isInitializingFromCwd: true })
+    // Then run the async initialization
+    useAppStore.getState().initializeFromCwd()
+  }
 }

@@ -1,8 +1,9 @@
-import { useMemo } from "react"
+import React, { useMemo, useCallback } from "react"
 import { useAppStore } from "../store/app-store"
 import { Select } from "./select"
 import { TextAttributes, SyntaxStyle, parseColor } from "@opentui/core"
 import * as Diff from "diff"
+import { Toast } from "./toast"
 
 // Get file extension for syntax highlighting
 function getFiletype(path: string): string {
@@ -120,10 +121,28 @@ export function PRsView() {
     selectedBranchIndex,
     createPRSearchQuery,
     getFilteredBranches,
-    getFilteredReviewers
+    getFilteredReviewers,
+    clearPRActionStatus
   } = useAppStore()
 
   const isFocused = focusedBox === 'workspace'
+
+  const handleToastDismiss = useCallback(() => {
+    clearPRActionStatus()
+  }, [clearPRActionStatus])
+
+  // Helper to wrap content with toast overlay
+  const renderWithToast = (content: React.ReactNode) => (
+    <>
+      {content}
+      <Toast 
+        message={prActionStatus?.message ?? null}
+        isError={prActionStatus?.isError}
+        duration={3000}
+        onDismiss={handleToastDismiss}
+      />
+    </>
+  )
 
   const syntaxStyle = useMemo(() => SyntaxStyle.fromStyles({
     keyword: { fg: parseColor("#FF7B72"), bold: true },
@@ -184,7 +203,7 @@ export function PRsView() {
   if (selectedPR && selectedConflict) {
     const filetype = getFiletype(selectedConflict.conflictPath)
     
-    return (
+    return renderWithToast(
       <box flexDirection="column" flexGrow={1}>
         <box flexDirection="row" gap={2} marginBottom={1}>
           <text attributes={TextAttributes.BOLD} fg="#ef4444">
@@ -236,7 +255,7 @@ export function PRsView() {
   if (selectedPR && selectedPRFile) {
     const filetype = getFiletype(selectedPRFile.path)
     
-    return (
+    return renderWithToast(
       <box flexDirection="column" flexGrow={1}>
         <box flexDirection="row" gap={2} marginBottom={1}>
           <text attributes={TextAttributes.BOLD} fg="#007595">
@@ -281,7 +300,7 @@ export function PRsView() {
   if (selectedPR && prDetails) {
     // Show comment input modal
     if (isAddingComment) {
-      return (
+      return renderWithToast(
         <box flexDirection="column" gap={1}>
           <text attributes={TextAttributes.BOLD}>Add Comment to PR</text>
           <text fg="#888888">{selectedPR.name}</text>
@@ -301,19 +320,13 @@ export function PRsView() {
           <text fg="#888888" marginTop={1}>
             Ctrl+Enter: Submit | Esc: Cancel
           </text>
-          
-          {prActionStatus && (
-            <text fg={prActionStatus.isError ? 'red' : 'green'} marginTop={1}>
-              {prActionStatus.message}
-            </text>
-          )}
         </box>
       )
     }
     
     // Show completion message input modal
     if (isCompletingPR) {
-      return (
+      return renderWithToast(
         <box flexDirection="column" gap={1}>
           <text attributes={TextAttributes.BOLD}>Complete PR (Merge)</text>
           <text fg="#888888">{selectedPR.name}</text>
@@ -333,19 +346,13 @@ export function PRsView() {
           <text fg="#888888" marginTop={1}>
             Ctrl+Enter: Complete PR | Esc: Cancel
           </text>
-          
-          {prActionStatus && (
-            <text fg={prActionStatus.isError ? 'red' : 'green'} marginTop={1}>
-              {prActionStatus.message}
-            </text>
-          )}
         </box>
       )
     }
     
     // Show reviewer selection modal
     if (isAddingReviewer) {
-      return (
+      return renderWithToast(
         <box flexDirection="column" gap={1}>
           <text attributes={TextAttributes.BOLD}>Add Reviewer</text>
           <text fg="#888888">{selectedPR.name}</text>
@@ -378,17 +385,11 @@ export function PRsView() {
           <text fg="#888888" marginTop={1}>
             Enter: Add reviewer | R: Toggle required | Esc: Cancel
           </text>
-          
-          {prActionStatus && (
-            <text fg={prActionStatus.isError ? 'red' : 'green'} marginTop={1}>
-              {prActionStatus.message}
-            </text>
-          )}
         </box>
       )
     }
     
-    return (
+    return renderWithToast(
       <box flexDirection="column" gap={1}>
         {/* PR Title with draft indicator */}
         <box flexDirection="row" gap={2}>
@@ -402,19 +403,6 @@ export function PRsView() {
         <text fg="#888888">
           {prDetails.sourceBranch?.replace('refs/heads/', '')} → {prDetails.targetBranch?.replace('refs/heads/', '')}
         </text>
-        
-        {/* Action status message */}
-        {prActionStatus && (
-          <box 
-            borderStyle="rounded" 
-            borderColor={prActionStatus.isError ? 'red' : 'green'}
-            padding={0.5}
-          >
-            <text fg={prActionStatus.isError ? 'red' : 'green'}>
-              {prActionLoading ? '⏳ ' : ''}{prActionStatus.message}
-            </text>
-          </box>
-        )}
         
         {prDetailsLoading ? (
           <text fg="#888888">Loading PR details...</text>
@@ -523,7 +511,7 @@ export function PRsView() {
 
   // Show Create PR view
   if (isCreatingPR) {
-    return (
+    return renderWithToast(
       <box flexDirection="column" gap={1}>
         <text attributes={TextAttributes.BOLD}>
           Create Pull Request
@@ -555,13 +543,6 @@ export function PRsView() {
             [6] Confirm
           </text>
         </box>
-        
-        {/* Action status */}
-        {prActionStatus && (
-          <text fg={prActionStatus.isError ? 'red' : 'green'}>
-            {prActionStatus.message}
-          </text>
-        )}
         
         {/* Step content */}
         {branchesLoading ? (
@@ -716,7 +697,7 @@ export function PRsView() {
   }
 
   // Show PR list
-  return (
+  return renderWithToast(
     <box flexDirection="column" gap={1}>
       <text attributes={TextAttributes.BOLD}>
         Pull Requests for: {selectedRepo?.name}

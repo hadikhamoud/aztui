@@ -2,7 +2,7 @@ import { createCliRenderer, PasteEvent } from "@opentui/core"
 import { useKeyboard, createRoot, useAppContext } from "@opentui/react"
 import { useTerminalDimensions } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
-import { useAppStore } from "./store/app-store"
+import { useAppStore, autoInitialize } from "./store/app-store"
 import { ProjectBox } from "./components/project-box"
 import { RepoBox } from "./components/repo-box"
 import { WorkspaceBox } from "./components/workspace-box"
@@ -10,6 +10,39 @@ import { Controls } from "./components/controls"
 import { SearchBar } from "./components/search-bar"
 import { SetupView } from "./components/setup-view"
 import { checkForUpdates, UpdateCheckResult } from "./config/updater"
+import { runConfigCommand } from "./commands/config"
+import { runLoginCommand } from "./commands/login"
+
+// Handle CLI commands before starting the TUI
+const args = process.argv.slice(2)
+const command = args[0]
+
+// Commands that exit after running
+switch (command) {
+  case "config":
+    await runConfigCommand()
+    process.exit(0)
+    break
+}
+
+// Commands that modify state before TUI starts
+switch (command) {
+  case "login":
+    await runLoginCommand()
+    break
+  case "prs":
+  case "pr":
+    useAppStore.setState({ pendingView: 'prs' })
+    break
+  case "build":
+  case "builds":
+  case "pipelines":
+    useAppStore.setState({ pendingView: 'pipelines' })
+    break
+}
+
+// Now run auto-initialization (after pendingView is set)
+autoInitialize()
 
 function App() {
   const { width, height } = useTerminalDimensions()
