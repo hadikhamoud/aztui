@@ -496,6 +496,14 @@ function App() {
           state.submitCompletion()
           return
         }
+        if (key.name === "t") {
+          state.cycleCompletionMergeStrategy()
+          return
+        }
+        if (key.name === "b") {
+          state.toggleCompletionDeleteBranch()
+          return
+        }
         if (key.name === "backspace") {
           state.setCompletionMessage(state.completionMessage.slice(0, -1))
           return
@@ -504,8 +512,8 @@ function App() {
           state.setCompletionMessage(state.completionMessage + '\n')
           return
         }
-        // Handle typed characters and pasted text
-        if (key.sequence && key.name !== 'escape') {
+        // Handle typed characters and pasted text (skip t and b as they're commands)
+        if (key.sequence && key.name !== 'escape' && key.name !== 't' && key.name !== 'b') {
           if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
             return
           }

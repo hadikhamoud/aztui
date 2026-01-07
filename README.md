@@ -5,7 +5,7 @@
 ### Current Features 
 - view projects and repos
 - view pipelines, and runs. (run details work in progress)
-- clone repo in any directory ssh or https
+- clone repo in any directory ssh or https using PAT
 - view PRs and act on them
 - create PRs
 - yank repo links

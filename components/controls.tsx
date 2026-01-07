@@ -52,7 +52,7 @@ export function Controls() {
         return "Ctrl+Enter: Submit | Esc: Cancel"
       }
       if (isCompletingPR) {
-        return "Ctrl+Enter: Complete PR | Esc: Cancel"
+        return "Ctrl+Enter: Complete | T: Merge type | B: Delete branch | Esc: Cancel"
       }
       if (isAddingReviewer) {
         return "Enter: Add reviewer | R: Toggle required | j/k: Navigate | Esc: Cancel"

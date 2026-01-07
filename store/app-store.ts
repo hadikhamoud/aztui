@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SelectOption } from '@opentui/core'
-import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getBuildRunUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, type BuildStep, type DetectedRepo } from '../api'
+import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getBuildRunUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, getPullRequestWorkItems, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, MergeStrategy, type BuildStep, type DetectedRepo } from '../api'
 import { hasCredentials, saveConfig, getCredentials } from '../config'
 
 export interface PRFileChange {
@@ -190,6 +190,8 @@ interface AppStore {
   commentText: string
   isCompletingPR: boolean
   completionMessage: string
+  completionMergeStrategy: 'noFastForward' | 'squash' | 'rebase' | 'rebaseMerge'
+  completionDeleteBranch: boolean
   
   // PR Details
   prIsDraft: boolean
@@ -197,6 +199,7 @@ interface AppStore {
   prReviewers: PRReviewer[]
   prStatuses: PRStatus[]
   prConflicts: PRConflict[]
+  prWorkItems: { id: string; url: string }[]
   prDetailsLoading: boolean
   
   // Conflict viewing
@@ -243,6 +246,9 @@ interface AppStore {
   startCompletingPR: () => void
   cancelCompletingPR: () => void
   setCompletionMessage: (message: string) => void
+  setCompletionMergeStrategy: (strategy: 'noFastForward' | 'squash' | 'rebase' | 'rebaseMerge') => void
+  toggleCompletionDeleteBranch: () => void
+  cycleCompletionMergeStrategy: () => void
   submitCompletion: () => Promise<void>
   clearPRActionStatus: () => void
   toggleDraft: () => Promise<void>
@@ -1295,6 +1301,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   prReviewers: [],
   prStatuses: [],
   prConflicts: [],
+  prWorkItems: [],
   prDetailsLoading: false,
   
   // Conflict viewing
@@ -1322,6 +1329,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       prReviewers: [],
       prStatuses: [],
       prConflicts: [],
+      prWorkItems: [],
       prDetailsLoading: false,
       selectedConflict: null,
       selectedConflictIndex: 0,
@@ -1342,6 +1350,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       prReviewers: [],
       prStatuses: [],
       prConflicts: [],
+      prWorkItems: [],
       prDetailsLoading: false,
       isAddingReviewer: false,
       teamMembers: [],
@@ -1387,6 +1396,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       prReviewers: [],
       prStatuses: [],
       prConflicts: [],
+      prWorkItems: [],
       prDetailsLoading: true
     })
     // Load file changes and PR details in parallel
@@ -1401,12 +1411,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ prDetailsLoading: true })
     try {
       // Load all PR details in parallel
-      const [prDetails, threads, reviewers, statuses, conflicts] = await Promise.all([
+      const [prDetails, threads, reviewers, statuses, conflicts, workItems] = await Promise.all([
         getPullRequestDetails(state.selectedProject.value, state.selectedRepo.value, prId),
         getPullRequestThreads(state.selectedProject.value, state.selectedRepo.value, prId),
         getPullRequestReviewers(state.selectedProject.value, state.selectedRepo.value, prId),
         getPullRequestStatuses(state.selectedProject.value, state.selectedRepo.value, prId),
-        getPullRequestConflicts(state.selectedProject.value, state.selectedRepo.value, prId)
+        getPullRequestConflicts(state.selectedProject.value, state.selectedRepo.value, prId),
+        getPullRequestWorkItems(state.selectedProject.value, state.selectedRepo.value, prId)
       ])
       
       // Process threads
@@ -1453,6 +1464,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         prReviewers,
         prStatuses,
         prConflicts,
+        prWorkItems: workItems || [],
         prDetailsLoading: false
       })
     } catch (error) {
@@ -1562,6 +1574,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   commentText: '',
   isCompletingPR: false,
   completionMessage: '',
+  completionMergeStrategy: 'noFastForward' as const,
+  completionDeleteBranch: false,
   
   openPRInBrowser: () => {
     const state = get()
@@ -1706,9 +1720,33 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ completionMessage: message })
   },
   
+  setCompletionMergeStrategy: (strategy: 'noFastForward' | 'squash' | 'rebase' | 'rebaseMerge') => {
+    set({ completionMergeStrategy: strategy })
+  },
+  
+  toggleCompletionDeleteBranch: () => {
+    set({ completionDeleteBranch: !get().completionDeleteBranch })
+  },
+  
+  cycleCompletionMergeStrategy: () => {
+    const strategies: ('noFastForward' | 'squash' | 'rebase' | 'rebaseMerge')[] = ['noFastForward', 'squash', 'rebase', 'rebaseMerge']
+    const current = get().completionMergeStrategy
+    const currentIndex = strategies.indexOf(current)
+    const nextIndex = (currentIndex + 1) % strategies.length
+    set({ completionMergeStrategy: strategies[nextIndex] })
+  },
+  
   submitCompletion: async () => {
     const state = get()
     if (!state.selectedProject || !state.selectedRepo || !state.selectedPR || !state.completionMessage.trim()) return
+    
+    // Map strategy name to enum value
+    const strategyMap: Record<string, MergeStrategy> = {
+      'noFastForward': MergeStrategy.NoFastForward,
+      'squash': MergeStrategy.Squash,
+      'rebase': MergeStrategy.Rebase,
+      'rebaseMerge': MergeStrategy.RebaseMerge
+    }
     
     set({ prActionLoading: true, prActionStatus: { message: 'Completing PR...', isError: false } })
     
@@ -1718,13 +1756,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
         state.selectedRepo.value,
         parseInt(state.selectedPR.value),
         state.completionMessage.trim(),
-        false // deleteSourceBranch
+        state.completionDeleteBranch,
+        strategyMap[state.completionMergeStrategy]
       )
       
       set({ 
         prActionLoading: false, 
         isCompletingPR: false,
         completionMessage: '',
+        completionMergeStrategy: 'noFastForward',
+        completionDeleteBranch: false,
         prActionStatus: { message: result.message, isError: !result.success } 
       })
       

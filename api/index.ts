@@ -507,12 +507,21 @@ export async function addPullRequestComment(
   }
 }
 
+// Merge strategy enum matching Azure DevOps API
+export enum MergeStrategy {
+  NoFastForward = 1,  // Merge commit (default)
+  Squash = 2,         // Squash all commits
+  Rebase = 3,         // Rebase and fast-forward
+  RebaseMerge = 4     // Rebase and merge commit (semi-linear)
+}
+
 export async function completePullRequest(
   projectId: string, 
   repositoryId: string, 
   pullRequestId: number,
   mergeCommitMessage: string,
-  deleteSourceBranch: boolean = false
+  deleteSourceBranch: boolean = false,
+  mergeStrategy: MergeStrategy = MergeStrategy.NoFastForward
 ): Promise<{ success: boolean; message: string }> {
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
@@ -539,7 +548,7 @@ export async function completePullRequest(
         completionOptions: {
           mergeCommitMessage: mergeCommitMessage,
           deleteSourceBranch: deleteSourceBranch,
-          mergeStrategy: 1 // NoFastForward (squash = 3, rebase = 2)
+          mergeStrategy: mergeStrategy
         }
       } as any,
       repositoryId,
@@ -658,6 +667,27 @@ export async function getConflictDetails(
   } catch (error) {
     console.error('Failed to get conflict details:', error);
     return null;
+  }
+}
+
+// Get PR work items (linked work items)
+export async function getPullRequestWorkItems(
+  projectId: string, 
+  repositoryId: string, 
+  pullRequestId: number
+): Promise<{ id: string; url: string }[]> {
+  await initializeConnection();
+  if (!gitApi) throw new Error("Failed to initialize git API");
+
+  try {
+    const workItemRefs = await gitApi.getPullRequestWorkItemRefs(repositoryId, pullRequestId, projectId);
+    return (workItemRefs || []).map(ref => ({
+      id: ref.id || '',
+      url: ref.url || ''
+    }));
+  } catch (error) {
+    console.error('Failed to get PR work items:', error);
+    return [];
   }
 }
 

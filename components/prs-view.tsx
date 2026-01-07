@@ -94,11 +94,14 @@ export function PRsView() {
     commentText,
     isCompletingPR,
     completionMessage,
+    completionMergeStrategy,
+    completionDeleteBranch,
     prIsDraft,
     prThreads,
     prReviewers,
     prStatuses,
     prConflicts,
+    prWorkItems,
     prDetailsLoading,
     isAddingReviewer,
     teamMembers,
@@ -326,6 +329,13 @@ export function PRsView() {
     
     // Show completion message input modal
     if (isCompletingPR) {
+      const mergeStrategyLabels: Record<string, string> = {
+        'noFastForward': 'Merge commit',
+        'squash': 'Squash',
+        'rebase': 'Rebase',
+        'rebaseMerge': 'Semi-linear (Rebase + Merge)'
+      }
+      
       return renderWithToast(
         <box flexDirection="column" gap={1}>
           <text attributes={TextAttributes.BOLD}>Complete PR (Merge)</text>
@@ -343,8 +353,22 @@ export function PRsView() {
             </text>
           </box>
           
+          <box flexDirection="row" gap={2} marginTop={1}>
+            <text>Merge Type:</text>
+            <text fg="#22c55e">{mergeStrategyLabels[completionMergeStrategy]}</text>
+            <text fg="#888888">(T to cycle)</text>
+          </box>
+          
+          <box flexDirection="row" gap={2}>
+            <text>Delete source branch:</text>
+            <text fg={completionDeleteBranch ? '#22c55e' : '#888888'}>
+              [{completionDeleteBranch ? 'x' : ' '}] {completionDeleteBranch ? 'Yes' : 'No'}
+            </text>
+            <text fg="#888888">(B to toggle)</text>
+          </box>
+          
           <text fg="#888888" marginTop={1}>
-            Ctrl+Enter: Complete PR | Esc: Cancel
+            Ctrl+Enter: Complete | T: Merge type | B: Delete branch | Esc: Cancel
           </text>
         </box>
       )
@@ -477,6 +501,21 @@ export function PRsView() {
                     </text>
                   </box>
                 ))}
+              </box>
+            )}
+            
+            {/* Linked Work Items */}
+            {prWorkItems.length > 0 && (
+              <box flexDirection="column" marginTop={1}>
+                <text fg="#888888">Linked Work Items ({prWorkItems.length}):</text>
+                {prWorkItems.slice(0, 5).map(item => (
+                  <text key={item.id} fg="#3b82f6">
+                    {'  '}#{item.id}
+                  </text>
+                ))}
+                {prWorkItems.length > 5 && (
+                  <text fg="#888888">  ...and {prWorkItems.length - 5} more</text>
+                )}
               </box>
             )}
           </>
