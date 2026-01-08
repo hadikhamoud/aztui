@@ -4,6 +4,7 @@ import { Select } from "./select"
 import { CloneView } from "./clone-view"
 import { PipelinesView } from "./pipelines-view"
 import { PRsView } from "./prs-view"
+import { CreateRepoView } from "./create-repo-view"
 import { Toast } from "./toast"
 import { useAppStore } from "../store/app-store"
 import { useTerminalDimensions } from "@opentui/react"
@@ -26,6 +27,7 @@ export function WorkspaceBox() {
     isInCloneView,
     isInPipelinesView,
     isInPRsView,
+    isCreatingRepo,
     enterCloneView,
     enterPipelinesView,
     enterPRsView,
@@ -56,6 +58,9 @@ export function WorkspaceBox() {
   }
 
   const getTitle = () => {
+    if (isCreatingRepo) {
+      return `${selectedProject?.name} - create repository`
+    }
     if (isInWorkspace && selectedRepo) {
       if (isInCloneView) {
         return `${selectedRepo.name} - clone`
@@ -72,6 +77,11 @@ export function WorkspaceBox() {
   }
 
   const renderContent = () => {
+    // Show create repo view when creating a new repository
+    if (isCreatingRepo) {
+      return <CreateRepoView />
+    }
+    
     if (!isInWorkspace || !selectedRepo) {
       return (
         <>

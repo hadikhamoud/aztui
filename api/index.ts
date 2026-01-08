@@ -149,6 +149,31 @@ export async function getRepos(projectId: string) {
   return pagedRepos;
 }
 
+export async function createRepository(
+  projectId: string,
+  repoName: string
+): Promise<{ success: boolean; message: string; repo?: any }> {
+  await initializeConnection();
+  if (!gitApi) throw new Error("Failed to initialize git API");
+
+  try {
+    const repo = await gitApi.createRepository(
+      { name: repoName },
+      projectId
+    );
+    
+    return {
+      success: true,
+      message: `Repository '${repoName}' created successfully`,
+      repo
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Failed to create repository: ${error instanceof Error ? error.message : 'Unknown error'}`
+    };
+  }
+}
 
 export async function getPipelines(projectId: string) {
   await initializeConnection();

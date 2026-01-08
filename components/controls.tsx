@@ -7,6 +7,7 @@ export function Controls() {
     isInCloneView, 
     isInPipelinesView,
     isInPRsView,
+    isCreatingRepo,
     cloneFocusedField, 
     isSearchActive,
     selectedPipeline,
@@ -24,6 +25,10 @@ export function Controls() {
   const getControlsText = () => {
     if (isSearchActive) {
       return "Type to search | Enter: Keep filter | Esc: Clear search"
+    }
+    
+    if (isCreatingRepo) {
+      return "Enter: Create Repository | Esc: Cancel"
     }
     
     if (isInCloneView && focusedBox === 'workspace') {
@@ -79,7 +84,7 @@ export function Controls() {
     }
     
     if (focusedBox === 'repos') {
-      return "Enter: Open workspace | Tab: Navigate | Arrow Keys: Move selection | /: Search"
+      return "Enter: Open workspace | N: New repo | Tab: Navigate | Arrow Keys: Move selection | /: Search"
     }
     
     return "Tab: Navigate | Arrow Keys: Move selection | /: Search"

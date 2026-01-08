@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SelectOption } from '@opentui/core'
-import { getProjects, getRepos, cloneRepo, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getBuildRunUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, getPullRequestWorkItems, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, MergeStrategy, type BuildStep, type DetectedRepo } from '../api'
+import { getProjects, getRepos, cloneRepo, createRepository, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getBuildRunUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, getPullRequestWorkItems, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, MergeStrategy, type BuildStep, type DetectedRepo } from '../api'
 import { hasCredentials, saveConfig, getCredentials } from '../config'
 
 export interface PRFileChange {
@@ -137,6 +137,17 @@ interface AppStore {
   setCloneFocusedField: (field: 'method' | 'path') => void
   executeClone: () => Promise<void>
   clearCloneStatus: () => void
+
+  // Create Repository functionality
+  isCreatingRepo: boolean
+  createRepoName: string
+  createRepoStatus: { message: string; isError: boolean } | null
+  createRepoLoading: boolean
+  startCreatingRepo: () => void
+  cancelCreatingRepo: () => void
+  setCreateRepoName: (name: string) => void
+  submitCreateRepo: () => Promise<void>
+  clearCreateRepoStatus: () => void
 
   // Pipelines functionality
   isInPipelinesView: boolean
@@ -990,6 +1001,83 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   clearCloneStatus: () => {
     set({ cloneStatus: null })
+  },
+
+  // Create Repository functionality
+  isCreatingRepo: false,
+  createRepoName: '',
+  createRepoStatus: null,
+  createRepoLoading: false,
+  
+  startCreatingRepo: () => {
+    set({ 
+      isCreatingRepo: true, 
+      createRepoName: '',
+      createRepoStatus: null,
+      createRepoLoading: false
+    })
+  },
+  
+  cancelCreatingRepo: () => {
+    set({ 
+      isCreatingRepo: false, 
+      createRepoName: '',
+      createRepoStatus: null,
+      createRepoLoading: false
+    })
+  },
+  
+  setCreateRepoName: (name: string) => {
+    set({ createRepoName: name })
+  },
+  
+  submitCreateRepo: async () => {
+    const state = get()
+    if (!state.selectedProject || !state.createRepoName.trim()) {
+      set({ createRepoStatus: { message: 'Please enter a repository name', isError: true } })
+      return
+    }
+    
+    set({ createRepoLoading: true, createRepoStatus: { message: 'Creating repository...', isError: false } })
+    
+    try {
+      const result = await createRepository(
+        state.selectedProject.value,
+        state.createRepoName.trim()
+      )
+      
+      if (result.success) {
+        set({ 
+          createRepoLoading: false,
+          createRepoStatus: { message: result.message, isError: false }
+        })
+        
+        // Refresh repos list and exit create view after a delay
+        setTimeout(() => {
+          const currentState = get()
+          currentState.loadRepos(currentState.selectedProject!.value)
+          set({ 
+            isCreatingRepo: false,
+            createRepoName: '',
+            createRepoStatus: null
+          })
+        }, 2000)
+      } else {
+        set({ 
+          createRepoLoading: false,
+          createRepoStatus: { message: result.message, isError: true }
+        })
+      }
+    } catch (error) {
+      set({ 
+        createRepoLoading: false,
+        createRepoStatus: { message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isError: true }
+      })
+    }
+  },
+  
+  clearCreateRepoStatus: () => {
+    set({ createRepoStatus: null })
   },
 
   // Pipelines functionality

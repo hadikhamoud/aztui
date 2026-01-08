@@ -646,6 +646,40 @@ function App() {
       return
     }
 
+    // Handle Create Repository view
+    if (state.isCreatingRepo) {
+      if (key.name === "escape") {
+        state.cancelCreatingRepo()
+        return
+      }
+      if (key.name === "return") {
+        state.submitCreateRepo()
+        return
+      }
+      if (key.name === "backspace") {
+        state.setCreateRepoName(state.createRepoName.slice(0, -1))
+        return
+      }
+      // Handle typed characters
+      if (key.sequence && key.name !== 'escape') {
+        if (key.sequence.length === 1 && (key.ctrl || key.meta)) {
+          return
+        }
+        const printable = key.sequence.replace(/[\x00-\x1F\x7F]/g, '')
+        if (printable.length > 0) {
+          state.setCreateRepoName(state.createRepoName + printable)
+          return
+        }
+      }
+      return
+    }
+
+    // N to create new repo when in repos view
+    if (state.focusedBox === "repos" && state.selectedProject && key.name === "n") {
+      state.startCreatingRepo()
+      return
+    }
+
     if (key.sequence === "/") {
       state.setSearchActive(true)
       state.setSearchQuery("")
@@ -731,6 +765,12 @@ function App() {
       // Handle paste in PR completion message
       if (state.isInPRsView && state.isCompletingPR) {
         state.setCompletionMessage(state.completionMessage + text)
+        return
+      }
+      
+      // Handle paste in create repo
+      if (state.isCreatingRepo) {
+        state.setCreateRepoName(state.createRepoName + text)
         return
       }
     }
