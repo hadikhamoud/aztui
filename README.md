@@ -10,5 +10,6 @@
 - create PRs
 - yank repo links
 - open PRs in browser
+- create new repositories
 
 install using the install script `install.sh`
