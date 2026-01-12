@@ -9,6 +9,8 @@
 - view PRs and act on them
 - create PRs
 - yank repo links
+- yank build links
+- view pipeline build runs
 - open PRs in browser
 - create new repositories
 
