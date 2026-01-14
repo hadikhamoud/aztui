@@ -14,4 +14,9 @@
 - open PRs in browser
 - create new repositories
 
+
+### Planned Features
+- Work items beast
+- Brush up comment addition and resolution
+
 install using the install script `install.sh`
