@@ -47,6 +47,7 @@ export function Toast({ message, isError = false, duration = 3000, onDismiss }: 
       paddingBottom={1}
       border={["left", "right", "top", "bottom"]}
       borderColor={borderColor}
+      backgroundColor="#000000"
     >
       <text attributes={TextAttributes.BOLD} fg={textColor} wrapMode="word" width="100%">
         {message}
