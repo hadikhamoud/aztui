@@ -188,6 +188,7 @@ interface AppStore {
 
   // Pull Requests functionality
   isInPRsView: boolean
+  prFilter: 'active' | 'completed'
   pullRequests: SelectOption[]
   selectedPR: SelectOption | null
   prsLoading: boolean
@@ -240,6 +241,7 @@ interface AppStore {
   
   enterPRsView: () => void
   exitPRsView: () => void
+  togglePRFilter: () => void
   loadPullRequests: () => Promise<void>
   selectPR: (pr: SelectOption) => void
   loadPRFileChanges: (prId: number) => Promise<void>
@@ -1375,6 +1377,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   // Pull Requests functionality
   isInPRsView: false,
+  prFilter: 'active',
   pullRequests: [],
   selectedPR: null,
   prsLoading: false,
@@ -1448,6 +1451,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
       conflictContentLoading: false
     })
   },
+  togglePRFilter: () => {
+    const state = get()
+    const newFilter = state.prFilter === 'active' ? 'completed' : 'active'
+    set({ prFilter: newFilter, pullRequests: [], selectedPR: null })
+    state.loadPullRequests()
+  },
   loadPullRequests: async () => {
     const state = get()
     // Need both project and repo with valid IDs (not just placeholders)
@@ -1455,7 +1464,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     set({ prsLoading: true })
     try {
-      const prs = await getPullRequests(state.selectedProject.value, state.selectedRepo.value)
+      const prs = await getPullRequests(state.selectedProject.value, state.selectedRepo.value, state.prFilter)
       const options = prs?.map(pr => ({
         name: `#${pr.pullRequestId} - ${pr.title}`,
         value: `${pr.pullRequestId}`,

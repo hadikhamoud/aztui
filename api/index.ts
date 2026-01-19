@@ -295,12 +295,15 @@ export async function getBuildStepLogs(projectId: string, buildId: number, logId
   }
 }
 
-export async function getPullRequests(projectId: string, repositoryId: string) {
+export async function getPullRequests(projectId: string, repositoryId: string, filter: 'active' | 'completed' = 'active') {
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
+  // PullRequestStatus: 1 = Active, 2 = Abandoned, 3 = Completed
+  const status = filter === 'active' ? 1 : 3;
+  
   const pullRequests = await gitApi.getPullRequests(repositoryId, {
-    status: 1 // Active PRs (PullRequestStatus.Active = 1)
+    status
   }, projectId);
 
   pullRequests?.forEach(pr => {

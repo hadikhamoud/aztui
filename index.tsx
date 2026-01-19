@@ -643,6 +643,12 @@ function App() {
         state.startCreatingPR()
         return
       }
+      
+      // Tab to toggle between active and completed PRs (when viewing PR list)
+      if (!state.selectedPR && key.name === "tab") {
+        state.togglePRFilter()
+        return
+      }
       return
     }
 

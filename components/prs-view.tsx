@@ -79,6 +79,7 @@ function getStatusIcon(state: string): { icon: string; color: string } {
 export function PRsView() {
   const {
     selectedRepo,
+    prFilter,
     pullRequests,
     selectedPR,
     prsLoading,
@@ -742,10 +743,29 @@ export function PRsView() {
         Pull Requests for: {selectedRepo?.name}
       </text>
       
+      {/* Filter tabs */}
+      <box flexDirection="row" gap={2}>
+        <text 
+          fg={prFilter === 'active' ? '#007595' : '#888888'}
+          attributes={prFilter === 'active' ? TextAttributes.BOLD : undefined}
+        >
+          {prFilter === 'active' ? '[Active]' : ' Active '}
+        </text>
+        <text 
+          fg={prFilter === 'completed' ? '#007595' : '#888888'}
+          attributes={prFilter === 'completed' ? TextAttributes.BOLD : undefined}
+        >
+          {prFilter === 'completed' ? '[Completed]' : ' Completed '}
+        </text>
+        <text fg="#666666">(Tab to switch)</text>
+      </box>
+      
       {prsLoading ? (
         <text fg="#888888">Loading pull requests...</text>
       ) : pullRequests.length === 0 ? (
-        <text fg="#888888">No active pull requests found. Press N to create one.</text>
+        <text fg="#888888">
+          No {prFilter} pull requests found.{prFilter === 'active' ? ' Press N to create one.' : ''}
+        </text>
       ) : (
         <>
           <Select 
@@ -754,7 +774,9 @@ export function PRsView() {
             value={selectedPR?.value}
             onSelect={handlePRSelect}
           />
-          <text fg="#888888" marginTop={1}>Press N to create a new PR</text>
+          {prFilter === 'active' && (
+            <text fg="#888888" marginTop={1}>Press N to create a new PR</text>
+          )}
         </>
       )}
     </box>
