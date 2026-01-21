@@ -47,7 +47,7 @@ const diffTheme = {
   removedSignColor: "#ef4444",
   lineNumberFg: "#6b7280",
   lineNumberBg: "#161b22",
-  addedLineNumberBg: "#0d3a0d",
+  addedLineNumberBg: "#0d3a0e",
   removedLineNumberBg: "#3a0d0d",
   selectionBg: "#264F78",
   selectionFg: "#FFFFFF",
