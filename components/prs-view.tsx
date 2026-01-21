@@ -126,7 +126,9 @@ export function PRsView() {
     createPRSearchQuery,
     getFilteredBranches,
     getFilteredReviewers,
-    clearPRActionStatus
+    clearPRActionStatus,
+    diffViewMode,
+    toggleDiffViewMode
   } = useAppStore()
 
   const isFocused = focusedBox === 'workspace'
@@ -218,9 +220,18 @@ export function PRsView() {
           </text>
         </box>
         
-        <text fg="#f59e0b" marginBottom={1}>
-          Type: {selectedConflict.conflictType} | Resolve this conflict in Azure DevOps or locally
-        </text>
+        <box flexDirection="row" gap={2} marginBottom={1}>
+          <text fg="#f59e0b">
+            Type: {selectedConflict.conflictType} | Resolve this conflict in Azure DevOps or locally
+          </text>
+          <text fg="#888888">|</text>
+          <text fg="#888888">
+            View: <span fg={diffViewMode === 'unified' ? '#007595' : '#888888'}>[Inline]</span>
+            {' / '}
+            <span fg={diffViewMode === 'split' ? '#007595' : '#888888'}>[Side-by-side]</span>
+            {' (V to toggle)'}
+          </text>
+        </box>
         
         {conflictContentLoading ? (
           <text fg="#888888">Loading conflict content...</text>
@@ -229,7 +240,7 @@ export function PRsView() {
         ) : (
           <diff
             diff={conflictDiff}
-            view="unified"
+            view={diffViewMode}
             filetype={filetype}
             syntaxStyle={syntaxStyle}
             showLineNumbers={true}
@@ -271,11 +282,18 @@ export function PRsView() {
           <text fg="#888888">
             ({selectedPRFileIndex + 1}/{prFileChanges.length})
           </text>
+          <text fg="#888888">|</text>
+          <text fg="#888888">
+            View: <span fg={diffViewMode === 'unified' ? '#007595' : '#888888'}>[Inline]</span>
+            {' / '}
+            <span fg={diffViewMode === 'split' ? '#007595' : '#888888'}>[Side-by-side]</span>
+            {' (V to toggle)'}
+          </text>
         </box>
         
         <diff
           diff={unifiedDiff}
-          view="unified"
+          view={diffViewMode}
           filetype={filetype}
           syntaxStyle={syntaxStyle}
           showLineNumbers={true}

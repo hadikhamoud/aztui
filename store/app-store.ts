@@ -219,6 +219,10 @@ interface AppStore {
   selectedConflictIndex: number
   conflictContentLoading: boolean
   
+  // Diff view mode
+  diffViewMode: 'unified' | 'split'
+  toggleDiffViewMode: () => void
+  
   // Reviewer management
   isAddingReviewer: boolean
   teamMembers: { id: string; displayName: string }[]
@@ -1399,6 +1403,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
   selectedConflict: null,
   selectedConflictIndex: 0,
   conflictContentLoading: false,
+  
+  // Diff view mode
+  diffViewMode: 'unified',
+  toggleDiffViewMode: () => {
+    const state = get()
+    set({ diffViewMode: state.diffViewMode === 'unified' ? 'split' : 'unified' })
+  },
   
   // Reviewer management
   isAddingReviewer: false,

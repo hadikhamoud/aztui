@@ -570,6 +570,10 @@ function App() {
       
       // If viewing a conflict, handle navigation
       if (state.selectedConflict) {
+        if (key.name === "v") {
+          state.toggleDiffViewMode()
+          return
+        }
         if (key.name === "up" || key.name === "k") {
           state.navigateConflict('up')
           return
@@ -616,6 +620,12 @@ function App() {
           state.selectConflict(state.selectedConflictIndex)
           return
         }
+      }
+      
+      // Toggle diff view mode when viewing a file diff
+      if (state.selectedPRFile && key.name === "v") {
+        state.toggleDiffViewMode()
+        return
       }
       
       // Navigate through files when viewing a PR
