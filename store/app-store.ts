@@ -606,11 +606,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     set({ detectedRepo: detected })
     
-    // Create placeholder project/repo from detected info and go to workspace IMMEDIATELY
-    // We have all the info we need from the git remote URL
     const placeholderProject = {
       name: detected.project,
-      value: '', // Will be filled when API loads
+      value: '', 
       description: ''
     }
     const placeholderRepo = {
@@ -630,7 +628,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       focusedBox: 'workspace'
     })
     
-    // Check if there's a pending view to open - do this IMMEDIATELY
     const pendingView = get().pendingView
     if (pendingView === 'prs') {
       get().enterPRsView()
@@ -640,7 +637,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ pendingView: null })
     }
     
-    // Load projects/repos in background - don't await, let it run independently
     ;(async () => {
       try {
         const projects = await getProjects()
