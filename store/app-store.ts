@@ -46,11 +46,9 @@ export interface PRConflict {
 type FocusedBox = 'projects' | 'repos' | 'workspace'
 
 interface AppStore {
-  // Pending view to open after initialization (from CLI commands)
   pendingView: 'prs' | 'pipelines' | null
   clearPendingView: () => void
 
-  // Setup state (shown when credentials are missing)
   needsSetup: boolean
   setupOrgUrl: string
   setupPat: string
@@ -178,7 +176,6 @@ interface AppStore {
   stopStepsRefresh: () => void
   goBackFromRuns: () => void
   goBackFromSteps: () => void
-  // Step navigation and logs
   navigateStep: (direction: 'up' | 'down') => void
   selectStep: (step: BuildStep, index: number) => void
   loadStepLogs: (step: BuildStep) => Promise<void>
