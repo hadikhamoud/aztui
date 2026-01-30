@@ -32,20 +32,33 @@ export async function runConfigCommand(): Promise<void> {
   }
 
   try {
-    const orgUrl = await question(
+    const orgInput = await question(
       rl,
-      `  Azure DevOps Org URL${currentConfig ? ` (${currentConfig.orgUrl})` : ""}: `
+      `  Azure DevOps Org (name or full URL)${currentConfig ? ` (${currentConfig.orgUrl})` : ""}: `
     )
     const pat = await question(rl, "  Personal Access Token (PAT): ")
 
     rl.close()
 
     // Use existing values if user pressed enter without input
-    const finalOrgUrl = orgUrl.trim() || currentConfig?.orgUrl || ""
+    let finalOrgUrl = orgInput.trim() || currentConfig?.orgUrl || ""
     const finalPat = pat.trim() || currentConfig?.pat || ""
 
     if (!finalOrgUrl || !finalPat) {
-      console.log("\n  Error: Both Org URL and PAT are required.\n")
+      console.log("\n  Error: Both Organization and PAT are required.\n")
+      process.exit(1)
+    }
+
+    // Process the org URL: if it's just a name, construct the full URL
+    if (!finalOrgUrl.includes('://') && !finalOrgUrl.includes('.')) {
+      // Just an org name, construct the full URL
+      finalOrgUrl = `https://dev.azure.com/${finalOrgUrl}`
+    } else if (finalOrgUrl.startsWith('dev.azure.com/') || finalOrgUrl.startsWith('www.dev.azure.com/')) {
+      // Handle case where user pastes without https://
+      finalOrgUrl = `https://${finalOrgUrl}`
+    } else if (!finalOrgUrl.includes('dev.azure.com') && !finalOrgUrl.includes('visualstudio.com')) {
+      // Invalid URL format
+      console.log("\n  Error: Invalid organization. Provide org name or full URL (dev.azure.com or visualstudio.com).\n")
       process.exit(1)
     }
 

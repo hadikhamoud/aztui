@@ -327,11 +327,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   submitSetup: async () => {
     const state = get()
-    const { setupOrgUrl, setupPat } = state
+    let { setupOrgUrl, setupPat } = state
     
     // Validate
     if (!setupOrgUrl.trim()) {
-      set({ setupError: 'Organization URL is required' })
+      set({ setupError: 'Organization name is required' })
       return
     }
     if (!setupPat.trim()) {
@@ -339,9 +339,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return
     }
     
-    // Validate URL format
-    if (!setupOrgUrl.includes('dev.azure.com') && !setupOrgUrl.includes('visualstudio.com')) {
-      set({ setupError: 'Invalid URL. Should be https://dev.azure.com/org or https://org.visualstudio.com' })
+    // Process the org URL: if it's just a name, construct the full URL
+    setupOrgUrl = setupOrgUrl.trim()
+    let finalOrgUrl = setupOrgUrl
+    
+    // If it doesn't contain a URL scheme or domain, treat it as just an org name
+    if (!setupOrgUrl.includes('://') && !setupOrgUrl.includes('.')) {
+      // Just an org name, construct the full URL
+      finalOrgUrl = `https://dev.azure.com/${setupOrgUrl}`
+    } else if (setupOrgUrl.startsWith('dev.azure.com/') || setupOrgUrl.startsWith('www.dev.azure.com/')) {
+      // Handle case where user pastes without https://
+      finalOrgUrl = `https://${setupOrgUrl}`
+    } else if (!setupOrgUrl.includes('dev.azure.com') && !setupOrgUrl.includes('visualstudio.com')) {
+      // Invalid URL format
+      set({ setupError: 'Invalid organization. Provide org name or full URL (dev.azure.com or visualstudio.com)' })
       return
     }
     
@@ -349,14 +360,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     try {
       // Save to config
-      const saved = saveConfig({ orgUrl: setupOrgUrl.trim(), pat: setupPat.trim() })
+      const saved = saveConfig({ orgUrl: finalOrgUrl, pat: setupPat.trim() })
       if (!saved) {
         set({ setupError: 'Failed to save configuration', setupSaving: false })
         return
       }
       
       // Reinitialize the API connection
-      reinitializeConnection(setupOrgUrl.trim(), setupPat.trim())
+      reinitializeConnection(finalOrgUrl, setupPat.trim())
       
       // Test the connection by loading projects
       const projects = await getProjects()

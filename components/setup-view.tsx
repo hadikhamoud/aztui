@@ -25,7 +25,7 @@ export function SetupView() {
       <box flexDirection="column" marginTop={1} gap={1}>
         <box flexDirection="column">
           <text fg={setupFocusedField === 'orgUrl' ? '#00BFFF' : '#888888'}>
-            {setupFocusedField === 'orgUrl' ? '> ' : '  '}Organization URL:
+            {setupFocusedField === 'orgUrl' ? '> ' : '  '}Organization Name:
           </text>
           <box 
             borderStyle="rounded" 
@@ -33,12 +33,12 @@ export function SetupView() {
             padding={0.5}
           >
             <text>
-              {setupOrgUrl || (setupFocusedField === 'orgUrl' ? '|' : 'https://dev.azure.com/your-org')}
+              {setupOrgUrl || (setupFocusedField === 'orgUrl' ? '|' : 'your-org')}
               {setupFocusedField === 'orgUrl' && setupOrgUrl ? '|' : ''}
             </text>
           </box>
           <text fg="#666666">
-            Example: https://dev.azure.com/myorganization
+            Just the org name (e.g., "myorg" for https://dev.azure.com/myorg)
           </text>
         </box>
 

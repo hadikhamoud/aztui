@@ -17,6 +17,40 @@ import { runLoginCommand } from "./commands/login"
 const args = process.argv.slice(2)
 const command = args[0]
 
+// Show help message
+if (command === '-h' || command === '--help') {
+  console.log(`
+  aztui - Azure DevOps Terminal UI
+
+  Usage:
+    aztui [command]
+
+  Commands:
+    (none)      Start the interactive TUI (default)
+    login       Re-authenticate or change credentials
+    config      Configure Azure DevOps credentials
+    prs, pr     Start in Pull Requests view
+    builds, pipelines  Start in Pipelines view
+
+  Options:
+    -h, --help  Show this help message
+
+  Examples:
+    aztui              # Start the TUI
+    aztui login        # Re-authenticate
+    aztui prs          # Start in PRs view
+    aztui --help       # Show this help
+
+  First time setup:
+    On first run, you'll be prompted to enter:
+    - Organization name (e.g., "myorg" for https://dev.azure.com/myorg)
+    - Personal Access Token (PAT)
+
+  For more information, visit: https://github.com/yourusername/aztui
+`)
+  process.exit(0)
+}
+
 // Commands that exit after running
 switch (command) {
   case "config":
