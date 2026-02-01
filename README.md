@@ -13,6 +13,7 @@
 - view pipeline build runs
 - open PRs in browser
 - create new repositories
+- easier login flow
 
 
 ### Planned Features
