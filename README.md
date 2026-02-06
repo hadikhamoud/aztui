@@ -16,7 +16,5 @@
 - easier login flow
 
 
-### Planned Features
-- add work item viewer (maybe inside workspaces or as a fourth view since independent from project 
 
 install using the install script `install.sh`
