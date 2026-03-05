@@ -1606,14 +1606,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const state = get()
     if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
     
-    set({ prFileChangesLoading: true })
+    set({
+      prFileChangesLoading: true,
+      prFileContentsLoading: false,
+      prFileChangesLoadedCount: 0,
+      prFileChangesTotalCount: 0,
+      prFileChanges: [],
+      selectedPRFile: null,
+      selectedPRFileIndex: 0
+    })
     try {
-      // Get the PR details from description
-      const prDetails = JSON.parse(state.selectedPR.description)
-      const sourceBranch = prDetails.sourceBranch
-      const targetBranch = prDetails.targetBranch
-      
-      // Get iterations to find the latest one
       const iterations = await getPullRequestIterations(
         state.selectedProject.value, 
         state.selectedRepo.value, 
@@ -1621,29 +1623,43 @@ export const useAppStore = create<AppStore>((set, get) => ({
       )
       
       if (!iterations || iterations.length === 0) {
-        set({ prFileChanges: [], prFileChangesLoading: false })
+        set({
+          prFileChanges: [],
+          prFileChangesLoading: false,
+          prFileContentsLoading: false,
+          prFileChangesLoadedCount: 0,
+          prFileChangesTotalCount: 0
+        })
         return
       }
       
-      // Get the latest iteration
       const latestIteration = iterations[iterations.length - 1]
-      
-      // Get changes for the latest iteration
-      const changes = await getPullRequestIterationChanges(
-        state.selectedProject.value,
-        state.selectedRepo.value,
-        prId,
-        latestIteration.id!
-      )
-      
-      if (!changes?.changeEntries) {
-        set({ prFileChanges: [], prFileChangesLoading: false })
-        return
+
+      // Load all changed files page-by-page
+      const pageSize = 200
+      let skip = 0
+      const allEntries: any[] = []
+
+      while (true) {
+        const page = await getPullRequestIterationChanges(
+          state.selectedProject.value,
+          state.selectedRepo.value,
+          prId,
+          latestIteration.id!,
+          pageSize,
+          skip
+        )
+
+        const entries = page?.changeEntries || []
+        if (entries.length === 0) break
+
+        allEntries.push(...entries)
+        if (entries.length < pageSize) break
+        skip += entries.length
       }
-      
-      // Get file contents for each change
+
       const fileChanges: PRFileChange[] = []
-      for (const change of changes.changeEntries.slice(0, 10)) { // Limit to 10 files for performance
+      for (const change of allEntries) {
         const path = change.item?.path
         if (!path) continue
         
@@ -1651,31 +1667,170 @@ export const useAppStore = create<AppStore>((set, get) => ({
                           change.changeType === 2 ? 'edit' : 
                           change.changeType === 16 ? 'delete' : 'unknown'
         
-        const diffResult = await getPullRequestFileDiff(
-          state.selectedProject.value,
-          state.selectedRepo.value,
-          prId,
-          path,
-          sourceBranch,
-          targetBranch
-        )
-        
         fileChanges.push({
           path,
           changeType,
-          originalContent: diffResult?.originalContent || '',
-          modifiedContent: diffResult?.modifiedContent || ''
+          originalContent: '',
+          modifiedContent: '',
+          isContentLoaded: false,
+          isContentLoading: false
         })
       }
-      
-      set({ prFileChanges: fileChanges, prFileChangesLoading: false })
+
+      const selectedPrId = parseInt(state.selectedPR.value)
+      if (selectedPrId !== prId) return
+
+      set({
+        prFileChanges: fileChanges,
+        prFileChangesLoading: false,
+        prFileContentsLoading: fileChanges.length > 0,
+        prFileChangesLoadedCount: 0,
+        prFileChangesTotalCount: fileChanges.length
+      })
+
+      if (fileChanges.length === 0) {
+        set({ prFileContentsLoading: false })
+        return
+      }
+
+      // Load file contents incrementally in background
+      const maxConcurrent = 4
+      const queue = fileChanges.map((_, index) => index)
+      const workerCount = Math.min(maxConcurrent, queue.length)
+
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          while (true) {
+            const nextIndex = queue.shift()
+            if (nextIndex === undefined) return
+            await get().loadPRFileContent(prId, nextIndex)
+          }
+        })
+      )
+
+      const currentState = get()
+      if (currentState.selectedPR && parseInt(currentState.selectedPR.value) === prId) {
+        set({ prFileContentsLoading: false })
+      }
     } catch (error) {
       console.error('Failed to load PR file changes:', error)
-      set({ prFileChanges: [], prFileChangesLoading: false })
+      set({
+        prFileChanges: [],
+        prFileChangesLoading: false,
+        prFileContentsLoading: false,
+        prFileChangesLoadedCount: 0,
+        prFileChangesTotalCount: 0
+      })
+    }
+  },
+  loadPRFileContent: async (prId: number, fileIndex: number) => {
+    const state = get()
+    if (!state.selectedProject || !state.selectedRepo || !state.selectedPR) return
+    if (parseInt(state.selectedPR.value) !== prId) return
+
+    const targetFile = state.prFileChanges[fileIndex]
+    if (!targetFile || targetFile.isContentLoaded || targetFile.isContentLoading) return
+
+    let sourceBranch = ''
+    let targetBranch = ''
+    try {
+      const prDetails = JSON.parse(state.selectedPR.description)
+      sourceBranch = prDetails.sourceBranch
+      targetBranch = prDetails.targetBranch
+    } catch {
+      return
+    }
+
+    set((currentState) => {
+      const file = currentState.prFileChanges[fileIndex]
+      if (!file || file.isContentLoaded || file.isContentLoading) return currentState
+      const updatedFiles = [...currentState.prFileChanges]
+      updatedFiles[fileIndex] = { ...file, isContentLoading: true }
+      const updatedSelectedFile =
+        currentState.selectedPRFileIndex === fileIndex
+          ? updatedFiles[fileIndex]
+          : currentState.selectedPRFile
+
+      return {
+        prFileChanges: updatedFiles,
+        selectedPRFile: updatedSelectedFile
+      }
+    })
+
+    try {
+      const diffResult = await getPullRequestFileDiff(
+        state.selectedProject.value,
+        state.selectedRepo.value,
+        prId,
+        targetFile.path,
+        sourceBranch,
+        targetBranch
+      )
+
+      set((currentState) => {
+        if (!currentState.selectedPR || parseInt(currentState.selectedPR.value) !== prId) {
+          return currentState
+        }
+
+        const file = currentState.prFileChanges[fileIndex]
+        if (!file) return currentState
+
+        const wasLoaded = file.isContentLoaded
+        const updatedFile: PRFileChange = {
+          ...file,
+          originalContent: diffResult?.originalContent || '',
+          modifiedContent: diffResult?.modifiedContent || '',
+          isContentLoaded: true,
+          isContentLoading: false
+        }
+        const updatedFiles = [...currentState.prFileChanges]
+        updatedFiles[fileIndex] = updatedFile
+
+        const loadedCount = wasLoaded
+          ? currentState.prFileChangesLoadedCount
+          : currentState.prFileChangesLoadedCount + 1
+
+        return {
+          prFileChanges: updatedFiles,
+          selectedPRFile: currentState.selectedPRFileIndex === fileIndex ? updatedFile : currentState.selectedPRFile,
+          prFileChangesLoadedCount: loadedCount
+        }
+      })
+    } catch {
+      set((currentState) => {
+        if (!currentState.selectedPR || parseInt(currentState.selectedPR.value) !== prId) {
+          return currentState
+        }
+        const file = currentState.prFileChanges[fileIndex]
+        if (!file) return currentState
+
+        const wasLoaded = file.isContentLoaded
+        const updatedFile: PRFileChange = {
+          ...file,
+          isContentLoaded: true,
+          isContentLoading: false,
+          originalContent: file.originalContent || '',
+          modifiedContent: file.modifiedContent || ''
+        }
+        const updatedFiles = [...currentState.prFileChanges]
+        updatedFiles[fileIndex] = updatedFile
+
+        return {
+          prFileChanges: updatedFiles,
+          selectedPRFile: currentState.selectedPRFileIndex === fileIndex ? updatedFile : currentState.selectedPRFile,
+          prFileChangesLoadedCount: wasLoaded
+            ? currentState.prFileChangesLoadedCount
+            : currentState.prFileChangesLoadedCount + 1
+        }
+      })
     }
   },
   selectPRFile: (file: PRFileChange, index: number) => {
     set({ selectedPRFile: file, selectedPRFileIndex: index })
+    const state = get()
+    if (state.selectedPR && !file.isContentLoaded && !file.isContentLoading) {
+      state.loadPRFileContent(parseInt(state.selectedPR.value), index)
+    }
   },
   navigatePRFile: (direction: 'up' | 'down') => {
     const state = get()
@@ -1691,6 +1846,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const file = state.prFileChanges[newIndex]
     if (file) {
       set({ selectedPRFile: file, selectedPRFileIndex: newIndex })
+      if (state.selectedPR && !file.isContentLoaded && !file.isContentLoading) {
+        state.loadPRFileContent(parseInt(state.selectedPR.value), newIndex)
+      }
     }
   },
   goBackFromPRFiles: () => {

@@ -85,6 +85,9 @@ export function PRsView() {
     prsLoading,
     prFileChanges,
     prFileChangesLoading,
+    prFileContentsLoading,
+    prFileChangesLoadedCount,
+    prFileChangesTotalCount,
     selectedPRFile,
     selectedPRFileIndex,
     selectPR,
@@ -290,30 +293,34 @@ export function PRsView() {
             {' (V to toggle)'}
           </text>
         </box>
-        
-        <diff
-          diff={unifiedDiff}
-          view={diffViewMode}
-          filetype={filetype}
-          syntaxStyle={syntaxStyle}
-          showLineNumbers={true}
-          wrapMode="none"
-          addedBg={diffTheme.addedBg}
-          removedBg={diffTheme.removedBg}
-          contextBg={diffTheme.contextBg}
-          addedSignColor={diffTheme.addedSignColor}
-          removedSignColor={diffTheme.removedSignColor}
-          lineNumberFg={diffTheme.lineNumberFg}
-          lineNumberBg={diffTheme.lineNumberBg}
-          addedLineNumberBg={diffTheme.addedLineNumberBg}
-          removedLineNumberBg={diffTheme.removedLineNumberBg}
-          selectionBg={diffTheme.selectionBg}
-          selectionFg={diffTheme.selectionFg}
-          style={{
-            flexGrow: 1,
-            flexShrink: 1,
-          }}
-        />
+
+        {!selectedPRFile.isContentLoaded || selectedPRFile.isContentLoading ? (
+          <text fg="#888888">Loading file diff...</text>
+        ) : (
+          <diff
+            diff={unifiedDiff}
+            view={diffViewMode}
+            filetype={filetype}
+            syntaxStyle={syntaxStyle}
+            showLineNumbers={true}
+            wrapMode="none"
+            addedBg={diffTheme.addedBg}
+            removedBg={diffTheme.removedBg}
+            contextBg={diffTheme.contextBg}
+            addedSignColor={diffTheme.addedSignColor}
+            removedSignColor={diffTheme.removedSignColor}
+            lineNumberFg={diffTheme.lineNumberFg}
+            lineNumberBg={diffTheme.lineNumberBg}
+            addedLineNumberBg={diffTheme.addedLineNumberBg}
+            removedLineNumberBg={diffTheme.removedLineNumberBg}
+            selectionBg={diffTheme.selectionBg}
+            selectionFg={diffTheme.selectionFg}
+            style={{
+              flexGrow: 1,
+              flexShrink: 1,
+            }}
+          />
+        )}
       </box>
     )
   }
@@ -547,7 +554,14 @@ export function PRsView() {
           <text fg="#888888">No file changes found</text>
         ) : (
           <box flexDirection="column" gap={0} marginTop={1}>
-            <text fg="#888888">Changed files ({prFileChanges.length}):</text>
+            <text fg="#888888">
+              Changed files ({prFileChanges.length})
+              {prFileChangesTotalCount > 0 && (
+                <span fg={prFileContentsLoading ? '#f59e0b' : '#22c55e'}>
+                  {` | Diffs loaded: ${prFileChangesLoadedCount}/${prFileChangesTotalCount}`}
+                </span>
+              )}
+            </text>
             {prFileChanges.map((file, index) => (
               <text 
                 key={file.path}
