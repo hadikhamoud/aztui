@@ -403,11 +403,25 @@ export async function getPullRequestIterations(projectId: string, repositoryId: 
   return iterations;
 }
 
-export async function getPullRequestIterationChanges(projectId: string, repositoryId: string, pullRequestId: number, iterationId: number) {
+export async function getPullRequestIterationChanges(
+  projectId: string,
+  repositoryId: string,
+  pullRequestId: number,
+  iterationId: number,
+  top?: number,
+  skip?: number
+) {
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const changes = await gitApi.getPullRequestIterationChanges(repositoryId, pullRequestId, iterationId, projectId);
+  const changes = await gitApi.getPullRequestIterationChanges(
+    repositoryId,
+    pullRequestId,
+    iterationId,
+    projectId,
+    top,
+    skip
+  );
   return changes;
 }
 
@@ -937,5 +951,4 @@ export async function cloneRepo(repoUrl: string, targetPath: string): Promise<{ 
     };
   }
 }
-
 

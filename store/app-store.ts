@@ -8,6 +8,8 @@ export interface PRFileChange {
   changeType: string
   originalContent: string
   modifiedContent: string
+  isContentLoaded: boolean
+  isContentLoading: boolean
 }
 
 export interface PRThread {
@@ -191,6 +193,9 @@ interface AppStore {
   prsLoading: boolean
   prFileChanges: PRFileChange[]
   prFileChangesLoading: boolean
+  prFileContentsLoading: boolean
+  prFileChangesLoadedCount: number
+  prFileChangesTotalCount: number
   selectedPRFile: PRFileChange | null
   selectedPRFileIndex: number
   prActionStatus: { message: string; isError: boolean } | null
@@ -246,6 +251,7 @@ interface AppStore {
   loadPullRequests: () => Promise<void>
   selectPR: (pr: SelectOption) => void
   loadPRFileChanges: (prId: number) => Promise<void>
+  loadPRFileContent: (prId: number, fileIndex: number) => Promise<void>
   loadPRDetails: (prId: number) => Promise<void>
   selectPRFile: (file: PRFileChange, index: number) => void
   navigatePRFile: (direction: 'up' | 'down') => void
@@ -1391,6 +1397,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   prsLoading: false,
   prFileChanges: [],
   prFileChangesLoading: false,
+  prFileContentsLoading: false,
+  prFileChangesLoadedCount: 0,
+  prFileChangesTotalCount: 0,
   selectedPRFile: null,
   selectedPRFileIndex: 0,
   
@@ -1428,6 +1437,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       pullRequests: [],
       selectedPR: null,
       prFileChanges: [],
+      prFileContentsLoading: false,
+      prFileChangesLoadedCount: 0,
+      prFileChangesTotalCount: 0,
       selectedPRFile: null,
       selectedPRFileIndex: 0,
       prIsDraft: false,
@@ -1449,6 +1461,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       pullRequests: [],
       selectedPR: null,
       prFileChanges: [],
+      prFileContentsLoading: false,
+      prFileChangesLoadedCount: 0,
+      prFileChangesTotalCount: 0,
       selectedPRFile: null,
       selectedPRFileIndex: 0,
       prIsDraft: false,
@@ -1501,6 +1516,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ 
       selectedPR: pr, 
       prFileChanges: [], 
+      prFileContentsLoading: false,
+      prFileChangesLoadedCount: 0,
+      prFileChangesTotalCount: 0,
       selectedPRFile: null, 
       selectedPRFileIndex: 0,
       prIsDraft: false,
@@ -1676,7 +1694,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   goBackFromPRFiles: () => {
-    set({ selectedPR: null, prFileChanges: [], selectedPRFile: null, selectedPRFileIndex: 0 })
+    set({
+      selectedPR: null,
+      prFileChanges: [],
+      prFileContentsLoading: false,
+      prFileChangesLoadedCount: 0,
+      prFileChangesTotalCount: 0,
+      selectedPRFile: null,
+      selectedPRFileIndex: 0
+    })
   },
   
   // PR Actions
