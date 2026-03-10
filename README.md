@@ -14,6 +14,7 @@
 - open PRs in browser
 - create new repositories
 - easier login flow
+- early exit when token invalid
 
 
 
