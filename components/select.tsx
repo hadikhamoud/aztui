@@ -1,5 +1,4 @@
 import type { SelectOption } from "@opentui/core"
-import "./assignable-select"
 
 export function Select({ options, focused, value, highlightedIndex, isSearchActive, isSelectMode, onSelect, onChange }: { options: SelectOption[], focused?: boolean, value?: any, highlightedIndex?: number, isSearchActive?: boolean, isSelectMode?: boolean, onSelect?: (value: string) => void, onChange?: (value: string) => void }) {
   // When search is active, use highlightedIndex; otherwise find index from value

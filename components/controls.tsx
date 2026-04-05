@@ -33,9 +33,9 @@ export function Controls() {
     
     if (isInCloneView && focusedBox === 'workspace') {
       if (cloneFocusedField === 'method') {
-        return "Left/Right: Switch method | Tab: Next field | Enter: Clone | Esc: Back"
+        return "Left/Right: Switch method | Tab: Next field | Enter: Clone | j/k: Scroll logs | Ctrl+d/u: Page | Esc: Back"
       } else {
-        return "Tab: Previous field | Enter: Clone | Esc: Back | Type: Enter path"
+        return "Tab: Previous field | Enter: Clone | Type: Enter path | Up/Down: Scroll logs | Ctrl+d/u: Page | Esc: Back"
       }
     }
 

@@ -2,7 +2,7 @@ import React from "react"
 import { useAppStore } from "../store/app-store"
 import { Select } from "./select"
 import { TextAttributes } from "@opentui/core"
-import type { BuildStep } from "../api"
+import { getLoggableBuildSteps, type BuildStep } from "../api"
 
 // Get status icon and color for a step
 function getStepStatusDisplay(step: BuildStep): { icon: string; color: string } {
@@ -199,6 +199,7 @@ export function PipelinesView() {
     const stages = pipelineSteps.filter(s => s.type === 'Stage')
     const jobs = pipelineSteps.filter(s => s.type === 'Job')
     const tasks = pipelineSteps.filter(s => s.type === 'Task')
+    const loggableSteps = getLoggableBuildSteps(pipelineSteps)
     
     // Build a map of parent IDs to check hierarchy
     const stageIds = new Set(stages.map(s => s.id))
@@ -228,7 +229,7 @@ export function PipelinesView() {
           )}
         </box>
         <text fg="#888888">Branch: {String(selectedPipelineRun.description || '')}</text>
-        <text fg="#888888">Press Enter on a task to view logs, j/k to navigate, o to open in browser</text>
+        <text fg="#888888">Press Enter on any loggable step to view logs, j/k to navigate, o to open in browser</text>
 
         {pipelineStepsLoading && pipelineSteps.length === 0 ? (
           <text fg="#888888">Loading steps...</text>
@@ -237,6 +238,9 @@ export function PipelinesView() {
         ) : (
           <box flexDirection="column" marginTop={1}>
             <text fg="#888888" attributes={TextAttributes.UNDERLINE}>Build Steps:</text>
+            {loggableSteps.length > 0 && (
+              <text fg="#888888">Log views available for {loggableSteps.length} step{loggableSteps.length === 1 ? '' : 's'}</text>
+            )}
             <box flexDirection="column" marginTop={0}>
               {(() => {
                 // Track task index across all rendering paths

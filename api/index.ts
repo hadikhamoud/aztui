@@ -143,7 +143,7 @@ export async function getRepos(projectId: string) {
   const pagedRepos = await gitApi.getRepositories(projectId);
   pagedRepos?.forEach(repo => {
     console.log(`Repo: ${repo.name} (${repo.id})`);
-    console.log(`Clone URL: ${repo.cloneUrl}`);
+    console.log(`Clone URL: ${repo.remoteUrl}`);
     console.log(`SSH URL: ${repo.sshUrl}`);
   });
   return pagedRepos;
@@ -222,6 +222,10 @@ export interface BuildStep {
   issues?: BuildStepIssue[] // Errors and warnings with messages
   logUrl?: string           // URL to fetch detailed logs
   logId?: number            // Log ID for fetching log content
+}
+
+export function getLoggableBuildSteps(steps: BuildStep[]): BuildStep[] {
+  return steps.filter(step => step.logId)
 }
 
 export async function getBuildTimeline(projectId: string, buildId: number): Promise<BuildStep[]> {
@@ -893,7 +897,11 @@ export async function createPullRequest(
   }
 }
 
-export async function cloneRepo(repoUrl: string, targetPath: string): Promise<{ success: boolean; message: string }> {
+export async function cloneRepo(
+  repoUrl: string,
+  targetPath: string,
+  onOutput?: (chunk: string) => void
+): Promise<{ success: boolean; message: string; logs: string[] }> {
   try {
     const { spawn } = require('child_process');
     const os = require('os');
@@ -908,31 +916,62 @@ export async function cloneRepo(repoUrl: string, targetPath: string): Promise<{ 
     }
     
     return new Promise((resolve) => {
+      const env = {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND
+          ? `${process.env.GIT_SSH_COMMAND} -oBatchMode=yes`
+          : 'ssh -oBatchMode=yes'
+      }
+
       const gitClone = spawn('git', ['clone', repoUrl, expandedPath], {
-        stdio: 'pipe'
+        stdio: 'pipe',
+        env
       });
 
       let output = '';
       let errorOutput = '';
+      const logs: string[] = [];
+
+      const appendOutput = (chunk: string) => {
+        const normalized = chunk.replace(/\r/g, '');
+        const lines = normalized.split('\n').filter(Boolean);
+        if (lines.length > 0) {
+          logs.push(...lines);
+        }
+        onOutput?.(chunk);
+      }
 
       gitClone.stdout.on('data', (data: Buffer) => {
-        output += data.toString();
+        const chunk = data.toString();
+        output += chunk;
+        appendOutput(chunk);
       });
 
       gitClone.stderr.on('data', (data: Buffer) => {
-        errorOutput += data.toString();
+        const chunk = data.toString();
+        errorOutput += chunk;
+        appendOutput(chunk);
       });
 
       gitClone.on('close', (code: number) => {
         if (code === 0) {
           resolve({ 
             success: true, 
-            message: `Repository successfully cloned to ${expandedPath}` 
+            message: `Repository successfully cloned to ${expandedPath}`,
+            logs
           });
         } else {
+          const combinedOutput = `${errorOutput}\n${output}`.trim();
+          const requiresAuth = /could not read from remote repository|permission denied|terminal prompts disabled|batchmode=yes|could not read username|authentication failed|enter passphrase|password/i.test(combinedOutput)
+          const message = requiresAuth
+            ? 'Clone failed: SSH/HTTPS authentication requires an interactive prompt. Use an ssh-agent or loaded key for SSH, or ensure your PAT-backed HTTPS URL is valid.'
+            : `Clone failed: ${combinedOutput || 'Unknown error'}`
+
           resolve({ 
             success: false, 
-            message: `Clone failed: ${errorOutput || 'Unknown error'}` 
+            message,
+            logs
           });
         }
       });
@@ -940,15 +979,16 @@ export async function cloneRepo(repoUrl: string, targetPath: string): Promise<{ 
       gitClone.on('error', (err: Error) => {
         resolve({ 
           success: false, 
-          message: `Clone failed: ${err.message}` 
+          message: `Clone failed: ${err.message}`,
+          logs
         });
       });
     });
   } catch (error) {
     return { 
       success: false, 
-      message: `Clone failed: ${error instanceof Error ? error.message : 'Unknown error'}` 
+      message: `Clone failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      logs: []
     };
   }
 }
-

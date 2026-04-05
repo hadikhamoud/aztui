@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SelectOption } from '@opentui/core'
-import { getProjects, getRepos, cloneRepo, createRepository, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getBuildRunUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, getPullRequestWorkItems, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, MergeStrategy, type BuildStep, type DetectedRepo } from '../api'
+import { getProjects, getRepos, cloneRepo, createRepository, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getLoggableBuildSteps, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getBuildRunUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, getPullRequestWorkItems, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, MergeStrategy, type BuildStep, type DetectedRepo } from '../api'
 import { hasCredentials, saveConfig, getCredentials } from '../config'
 
 export interface PRFileChange {
@@ -127,7 +127,10 @@ interface AppStore {
   isInCloneView: boolean
   cloneLocation: string
   cloneMethod: 'https' | 'ssh'
+  cloneLoading: boolean
   cloneStatus: { message: string; isError: boolean } | null
+  cloneLogs: string[]
+  cloneLogsScrollOffset: number
   cloneFocusedField: 'method' | 'path'
   enterCloneView: () => void
   exitCloneView: () => void
@@ -136,6 +139,7 @@ interface AppStore {
   toggleCloneMethod: () => void
   setCloneFocusedField: (field: 'method' | 'path') => void
   executeClone: () => Promise<void>
+  scrollCloneLogs: (direction: 'up' | 'down' | 'pageup' | 'pagedown') => void
   clearCloneStatus: () => void
 
   // Create Repository functionality
@@ -922,13 +926,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   isInCloneView: false,
   cloneLocation: '',
   cloneMethod: 'https',
+  cloneLoading: false,
   cloneStatus: null,
+  cloneLogs: [],
+  cloneLogsScrollOffset: 0,
   cloneFocusedField: 'method',
   enterCloneView: () => {
     set({ 
       isInCloneView: true, 
       cloneLocation: '', 
       cloneStatus: null,
+      cloneLogs: [],
+      cloneLogsScrollOffset: 0,
+      cloneLoading: false,
       cloneFocusedField: 'method'
     })
   },
@@ -937,6 +947,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       isInCloneView: false, 
       cloneLocation: '', 
       cloneStatus: null,
+      cloneLogs: [],
+      cloneLogsScrollOffset: 0,
+      cloneLoading: false,
       cloneFocusedField: 'method'
     })
   },
@@ -960,12 +973,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
         cloneStatus: { 
           message: 'Please specify a valid location', 
           isError: true 
-        } 
+        },
+        cloneLogs: [],
+        cloneLogsScrollOffset: 0,
+        cloneLoading: false
       })
       return
     }
 
     set({ 
+      cloneLoading: true,
+      cloneLogs: [
+        `Starting clone via ${state.cloneMethod.toUpperCase()}...`
+      ],
+      cloneLogsScrollOffset: 0,
       cloneStatus: { 
         message: `Cloning repository via ${state.cloneMethod.toUpperCase()}...`, 
         isError: false 
@@ -991,9 +1012,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
       }
       
-      const result = await cloneRepo(repoUrl, state.cloneLocation.trim())
+      const result = await cloneRepo(repoUrl, state.cloneLocation.trim(), (chunk) => {
+        const normalized = chunk.replace(/\r/g, '')
+        const newLines = normalized.split('\n').filter(Boolean)
+        if (newLines.length === 0) return
+
+        set(current => ({
+          cloneLogs: [...current.cloneLogs, ...newLines].slice(-200)
+        }))
+      })
       
       set({ 
+        cloneLoading: false,
+        cloneLogs: result.logs.length > 0 ? result.logs.slice(-200) : get().cloneLogs,
         cloneStatus: { 
           message: result.message, 
           isError: !result.success 
@@ -1008,12 +1039,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
     } catch (error) {
       set({ 
+        cloneLoading: false,
         cloneStatus: { 
           message: `Clone failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 
           isError: true 
         } 
       })
     }
+  },
+  scrollCloneLogs: (direction: 'up' | 'down' | 'pageup' | 'pagedown') => {
+    const state = get()
+    const step = direction === 'up' ? -1 : direction === 'down' ? 1 : direction === 'pageup' ? -10 : 10
+    const newOffset = Math.max(0, Math.min(state.cloneLogsScrollOffset + step, Math.max(0, state.cloneLogs.length - 1)))
+    set({ cloneLogsScrollOffset: newOffset })
   },
   clearCloneStatus: () => {
     set({ cloneStatus: null })
@@ -1325,19 +1363,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
   // Step navigation and logs
   navigateStep: (direction: 'up' | 'down') => {
     const state = get()
-    // Get only Task type steps (the actual executable steps)
-    const taskSteps = state.pipelineSteps.filter(s => s.type === 'Task')
-    if (taskSteps.length === 0) return
+    const loggableSteps = getLoggableBuildSteps(state.pipelineSteps)
+    if (loggableSteps.length === 0) return
     
     let newIndex = state.selectedStepIndex
     if (direction === 'down') {
-      newIndex = Math.min(state.selectedStepIndex + 1, taskSteps.length - 1)
+      newIndex = Math.min(state.selectedStepIndex + 1, loggableSteps.length - 1)
     } else {
       newIndex = Math.max(state.selectedStepIndex - 1, 0)
     }
     
     if (newIndex !== state.selectedStepIndex) {
-      const step = taskSteps[newIndex]
+      const step = loggableSteps[newIndex]
       set({ selectedStepIndex: newIndex, selectedStep: step, stepLogs: [], stepLogsScrollOffset: 0 })
       // Auto-load logs for the new step
       if (step?.logId) {

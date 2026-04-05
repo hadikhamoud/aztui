@@ -3,6 +3,7 @@ import { useKeyboard, createRoot, useAppContext } from "@opentui/react"
 import { useTerminalDimensions } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
 import { useAppStore, autoInitialize } from "./store/app-store"
+import { getLoggableBuildSteps } from "./api"
 import { ProjectBox } from "./components/project-box"
 import { RepoBox } from "./components/repo-box"
 import { WorkspaceBox } from "./components/workspace-box"
@@ -209,6 +210,26 @@ function App() {
         state.exitCloneView()
         return
       }
+
+      if ((key.name === "j" && state.cloneFocusedField !== 'path') || key.name === "down") {
+        state.scrollCloneLogs('down')
+        return
+      }
+
+      if ((key.name === "k" && state.cloneFocusedField !== 'path') || key.name === "up") {
+        state.scrollCloneLogs('up')
+        return
+      }
+
+      if (key.name === "pagedown" || (key.name === "d" && key.ctrl)) {
+        state.scrollCloneLogs('pagedown')
+        return
+      }
+
+      if (key.name === "pageup" || (key.name === "u" && key.ctrl)) {
+        state.scrollCloneLogs('pageup')
+        return
+      }
       
       if (key.name === "tab") {
         // Toggle between method and path fields
@@ -299,9 +320,7 @@ function App() {
           return
         }
         if (key.name === "return") {
-          // Select the current step to view logs
-          const tasks = state.pipelineSteps.filter(s => s.type === 'Task')
-          const step = tasks[state.selectedStepIndex]
+          const step = getLoggableBuildSteps(state.pipelineSteps)[state.selectedStepIndex]
           if (step) {
             state.selectStep(step, state.selectedStepIndex)
           }
@@ -779,10 +798,11 @@ function App() {
   const { keyHandler } = useAppContext()
   useEffect(() => {
     if (!keyHandler) return
+    const textDecoder = new TextDecoder()
     
     const handlePaste = (event: PasteEvent) => {
       const state = useAppStore.getState()
-      const text = event.text
+      const text = textDecoder.decode(event.bytes)
       
       // Handle paste in setup mode
       if (state.needsSetup) {
