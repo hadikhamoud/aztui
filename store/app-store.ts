@@ -1784,7 +1784,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const updatedFiles = [...currentState.prFileChanges]
       updatedFiles[fileIndex] = { ...file, isContentLoading: true }
       const updatedSelectedFile =
-        currentState.selectedPRFileIndex === fileIndex
+        currentState.selectedPRFile && currentState.selectedPRFileIndex === fileIndex
           ? updatedFiles[fileIndex]
           : currentState.selectedPRFile
 
@@ -1829,7 +1829,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
         return {
           prFileChanges: updatedFiles,
-          selectedPRFile: currentState.selectedPRFileIndex === fileIndex ? updatedFile : currentState.selectedPRFile,
+          selectedPRFile: currentState.selectedPRFile && currentState.selectedPRFileIndex === fileIndex ? updatedFile : currentState.selectedPRFile,
           prFileChangesLoadedCount: loadedCount
         }
       })
@@ -1854,7 +1854,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
         return {
           prFileChanges: updatedFiles,
-          selectedPRFile: currentState.selectedPRFileIndex === fileIndex ? updatedFile : currentState.selectedPRFile,
+          selectedPRFile: currentState.selectedPRFile && currentState.selectedPRFileIndex === fileIndex ? updatedFile : currentState.selectedPRFile,
           prFileChangesLoadedCount: wasLoaded
             ? currentState.prFileChangesLoadedCount
             : currentState.prFileChangesLoadedCount + 1
@@ -1882,7 +1882,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     const file = state.prFileChanges[newIndex]
     if (file) {
-      set({ selectedPRFile: file, selectedPRFileIndex: newIndex })
+      set({ selectedPRFileIndex: newIndex })
       if (state.selectedPR && !file.isContentLoaded && !file.isContentLoading) {
         state.loadPRFileContent(parseInt(state.selectedPR.value), newIndex)
       }

@@ -1,7 +1,7 @@
 import React from "react"
 import { useAppStore } from "../store/app-store"
 import { Select } from "./select"
-import { TextAttributes } from "@opentui/core"
+import { TextAttributes, type MouseEvent } from "@opentui/core"
 import { getLoggableBuildSteps, type BuildStep } from "../api"
 
 // Get status icon and color for a step
@@ -125,6 +125,20 @@ export function PipelinesView() {
     stepLogsScrollOffset
   } = useAppStore()
 
+  const handleStepLogMouseScroll = (event: MouseEvent) => {
+    const direction = event.scroll?.direction
+    if (direction === 'up') {
+      useAppStore.getState().scrollLogs('up')
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    if (direction === 'down') {
+      useAppStore.getState().scrollLogs('down')
+      event.preventDefault()
+      event.stopPropagation()
+    }
+  }
+
   const isFocused = focusedBox === 'workspace'
 
   const handlePipelineSelect = (value: string) => {
@@ -165,7 +179,7 @@ export function PipelinesView() {
         ) : stepLogs.length === 0 ? (
           <text fg="#888888">No logs available</text>
         ) : (
-          <box flexDirection="column">
+          <box flexDirection="column" onMouseScroll={handleStepLogMouseScroll}>
             <text fg="#888888">
               Lines {stepLogsScrollOffset + 1}-{Math.min(stepLogsScrollOffset + 30, stepLogs.length)} of {stepLogs.length} (j/k to scroll, Esc to go back)
             </text>
