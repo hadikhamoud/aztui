@@ -122,7 +122,8 @@ export function PipelinesView() {
     selectedStepIndex,
     stepLogs,
     stepLogsLoading,
-    stepLogsScrollOffset
+    stepLogsScrollOffset,
+    stepLogsWrap
   } = useAppStore()
 
   const handleStepLogMouseScroll = (event: MouseEvent) => {
@@ -181,9 +182,9 @@ export function PipelinesView() {
         ) : (
           <box flexDirection="column" onMouseScroll={handleStepLogMouseScroll}>
             <text fg="#888888">
-              Lines {stepLogsScrollOffset + 1}-{Math.min(stepLogsScrollOffset + 30, stepLogs.length)} of {stepLogs.length} (j/k to scroll, Esc to go back)
+              Lines {stepLogsScrollOffset + 1}-{Math.min(stepLogsScrollOffset + 30, stepLogs.length)} of {stepLogs.length} ({stepLogsWrap ? 'wrapped' : 'unwrapped'}, mouse wheel or j/k to scroll, W to toggle wrap)
             </text>
-            <box flexDirection="column" marginTop={1}>
+            <box flexDirection="column" marginTop={1} onMouseScroll={handleStepLogMouseScroll}>
               {visibleLogs.map((line, idx) => {
                 const lineNum = stepLogsScrollOffset + idx + 1
                 // Ensure line is a string
@@ -195,7 +196,7 @@ export function PipelinesView() {
                 // Clean up Azure DevOps formatting tags
                 const cleanLine = lineStr.replace(/##\[(error|warning|section|command|debug)\]/g, '')
                 return (
-                  <text key={idx} fg={lineColor}>
+                  <text key={idx} fg={lineColor} wrapMode={stepLogsWrap ? 'word' : 'none'}>
                     <span fg="#666666">{String(lineNum).padStart(4, ' ')} </span>{cleanLine}
                   </text>
                 )

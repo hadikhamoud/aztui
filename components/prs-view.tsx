@@ -558,7 +558,7 @@ export function PRsView() {
               Changed files ({prFileChanges.length})
               {prFileChangesTotalCount > 0 && (
                 <span fg={prFileContentsLoading ? '#f59e0b' : '#22c55e'}>
-                  {` | Diffs loaded: ${prFileChangesLoadedCount}/${prFileChangesTotalCount}`}
+                  {` | Opened diffs loaded: ${prFileChangesLoadedCount}/${prFileChangesTotalCount}`}
                 </span>
               )}
             </text>

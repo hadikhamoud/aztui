@@ -282,6 +282,10 @@ function App() {
           state.exitStepLogs()
           return
         }
+        if (key.name === "w") {
+          state.toggleStepLogsWrap()
+          return
+        }
         if (key.name === "j" || key.name === "down") {
           state.scrollLogs('down')
           return

@@ -171,6 +171,7 @@ interface AppStore {
   stepLogs: string[]
   stepLogsLoading: boolean
   stepLogsScrollOffset: number
+  stepLogsWrap: boolean
   enterPipelinesView: () => void
   exitPipelinesView: () => void
   loadPipelines: () => Promise<void>
@@ -186,6 +187,7 @@ interface AppStore {
   selectStep: (step: BuildStep, index: number) => void
   loadStepLogs: (step: BuildStep) => Promise<void>
   scrollLogs: (direction: 'up' | 'down' | 'pageup' | 'pagedown') => void
+  toggleStepLogsWrap: () => void
   exitStepLogs: () => void
   openBuildRunInBrowser: () => void
 
@@ -1152,6 +1154,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   stepLogs: [],
   stepLogsLoading: false,
   stepLogsScrollOffset: 0,
+  stepLogsWrap: false,
   enterPipelinesView: () => {
     const state = get()
     set({ 
@@ -1167,7 +1170,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       selectedStepIndex: 0,
       stepLogs: [],
       stepLogsLoading: false,
-      stepLogsScrollOffset: 0
+      stepLogsScrollOffset: 0,
+      stepLogsWrap: false
     })
     state.loadPipelines()
   },
@@ -1187,7 +1191,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       selectedStepIndex: 0,
       stepLogs: [],
       stepLogsLoading: false,
-      stepLogsScrollOffset: 0
+      stepLogsScrollOffset: 0,
+      stepLogsWrap: false
     })
   },
   loadPipelines: async () => {
@@ -1408,6 +1413,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const step = direction === 'up' ? -1 : direction === 'down' ? 1 : direction === 'pageup' ? -10 : 10
     const newOffset = Math.max(0, Math.min(state.stepLogsScrollOffset + step, Math.max(0, state.stepLogs.length - 20)))
     set({ stepLogsScrollOffset: newOffset })
+  },
+  toggleStepLogsWrap: () => {
+    const state = get()
+    set({ stepLogsWrap: !state.stepLogsWrap })
   },
   exitStepLogs: () => {
     set({ selectedStep: null, stepLogs: [], stepLogsScrollOffset: 0, selectedStepIndex: 0 })
@@ -1720,35 +1729,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({
         prFileChanges: fileChanges,
         prFileChangesLoading: false,
-        prFileContentsLoading: fileChanges.length > 0,
+        prFileContentsLoading: false,
         prFileChangesLoadedCount: 0,
         prFileChangesTotalCount: fileChanges.length
       })
 
-      if (fileChanges.length === 0) {
-        set({ prFileContentsLoading: false })
-        return
-      }
-
-      // Load file contents incrementally in background
-      const maxConcurrent = 4
-      const queue = fileChanges.map((_, index) => index)
-      const workerCount = Math.min(maxConcurrent, queue.length)
-
-      await Promise.all(
-        Array.from({ length: workerCount }, async () => {
-          while (true) {
-            const nextIndex = queue.shift()
-            if (nextIndex === undefined) return
-            await get().loadPRFileContent(prId, nextIndex)
-          }
-        })
-      )
-
-      const currentState = get()
-      if (currentState.selectedPR && parseInt(currentState.selectedPR.value) === prId) {
-        set({ prFileContentsLoading: false })
-      }
+      return
     } catch (error) {
       console.error('Failed to load PR file changes:', error)
       set({
@@ -1790,6 +1776,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
       return {
         prFileChanges: updatedFiles,
+        prFileContentsLoading: true,
         selectedPRFile: updatedSelectedFile
       }
     })
@@ -1829,6 +1816,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
         return {
           prFileChanges: updatedFiles,
+          prFileContentsLoading: false,
           selectedPRFile: currentState.selectedPRFile && currentState.selectedPRFileIndex === fileIndex ? updatedFile : currentState.selectedPRFile,
           prFileChangesLoadedCount: loadedCount
         }
@@ -1854,6 +1842,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
         return {
           prFileChanges: updatedFiles,
+          prFileContentsLoading: false,
           selectedPRFile: currentState.selectedPRFile && currentState.selectedPRFileIndex === fileIndex ? updatedFile : currentState.selectedPRFile,
           prFileChangesLoadedCount: wasLoaded
             ? currentState.prFileChangesLoadedCount

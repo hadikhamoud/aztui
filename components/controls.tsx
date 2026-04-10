@@ -41,7 +41,7 @@ export function Controls() {
 
     if (isInPipelinesView && focusedBox === 'workspace') {
       if (selectedStep) {
-        return "j/k: Scroll logs | Ctrl+d/u: Page down/up | Esc: Back to steps"
+        return "Mouse wheel or j/k: Scroll logs | W: Toggle wrap | Ctrl+d/u: Page down/up | Esc: Back to steps"
       }
       if (selectedPipelineRun) {
         return "j/k: Navigate steps | Enter: View logs | O: Open in browser | Esc: Back to runs"

@@ -18,6 +18,50 @@ let buildApi: buildA.BuildApi | null = null;
 let pipelineApi: pipelineA.PipelinesApi | null = null;
 let connectionPromise: Promise<void> | null = null;
 
+type CacheEntry<T> = {
+  expiresAt: number;
+  value: T;
+};
+
+const apiCache = new Map<string, CacheEntry<unknown>>();
+const pendingApiRequests = new Map<string, Promise<unknown>>();
+
+function clearApiCache(): void {
+  apiCache.clear();
+  pendingApiRequests.clear();
+}
+
+function getCacheKey(scope: string, ...parts: Array<string | number | boolean | undefined>): string {
+  return [scope, ...parts.map(part => String(part ?? ''))].join('::');
+}
+
+async function withCache<T>(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const cached = apiCache.get(key) as CacheEntry<T> | undefined;
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const pending = pendingApiRequests.get(key) as Promise<T> | undefined;
+  if (pending) {
+    return pending;
+  }
+
+  const request = loader()
+    .then(value => {
+      apiCache.set(key, { value, expiresAt: now + ttlMs });
+      pendingApiRequests.delete(key);
+      return value;
+    })
+    .catch(error => {
+      pendingApiRequests.delete(key);
+      throw error;
+    });
+
+  pendingApiRequests.set(key, request);
+  return request;
+}
+
 // Reinitialize connection with new credentials
 export function reinitializeConnection(newOrgUrl: string, newPat: string): void {
   orgUrl = newOrgUrl;
@@ -28,6 +72,7 @@ export function reinitializeConnection(newOrgUrl: string, newPat: string): void 
   buildApi = null;
   pipelineApi = null;
   connectionPromise = null;
+  clearApiCache();
 }
 
 // Extract org name from the configured org URL
@@ -126,7 +171,7 @@ export async function getProjects() {
   await initializeConnection();
   if (!coreApi) throw new Error("Failed to initialize core API");
 
-  const pagedProjects = await coreApi.getProjects();
+  const pagedProjects = await withCache(getCacheKey('projects'), 60_000, () => coreApi!.getProjects());
 
   pagedProjects?.forEach(project => {
     console.log(`Project: ${project.name} (${project.id})`);
@@ -140,7 +185,7 @@ export async function getRepos(projectId: string) {
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const pagedRepos = await gitApi.getRepositories(projectId);
+  const pagedRepos = await withCache(getCacheKey('repos', projectId), 60_000, () => gitApi!.getRepositories(projectId));
   pagedRepos?.forEach(repo => {
     console.log(`Repo: ${repo.name} (${repo.id})`);
     console.log(`Clone URL: ${repo.remoteUrl}`);
@@ -172,6 +217,8 @@ export async function createRepository(
       success: false,
       message: `Failed to create repository: ${error instanceof Error ? error.message : 'Unknown error'}`
     };
+  } finally {
+    clearApiCache();
   }
 }
 
@@ -306,9 +353,11 @@ export async function getPullRequests(projectId: string, repositoryId: string, f
   // PullRequestStatus: 1 = Active, 2 = Abandoned, 3 = Completed
   const status = filter === 'active' ? 1 : 3;
   
-  const pullRequests = await gitApi.getPullRequests(repositoryId, {
-    status
-  }, projectId);
+  const pullRequests = await withCache(
+    getCacheKey('pullRequests', projectId, repositoryId, filter),
+    20_000,
+    () => gitApi!.getPullRequests(repositoryId, { status }, projectId)
+  );
 
   pullRequests?.forEach(pr => {
     console.log(`PR: ${pr.title} (#${pr.pullRequestId}) - ${pr.status}`);
@@ -321,19 +370,23 @@ export async function getBuildDefinitions(projectId: string, repositoryId?: stri
   await initializeConnection();
   if (!buildApi) throw new Error("Failed to initialize build API");
 
-  const definitions = await buildApi.getDefinitions(
-    projectId,
-    undefined, // name
-    repositoryId, // repositoryId
-    undefined, // repositoryType
-    undefined, // queryOrder
-    undefined, // top
-    undefined, // continuationToken
-    undefined, // minMetricsTime
-    undefined, // definitionIds
-    undefined, // path
-    undefined, // builtAfter
-    undefined  // notBuiltAfter
+  const definitions = await withCache(
+    getCacheKey('buildDefinitions', projectId, repositoryId),
+    30_000,
+    () => buildApi!.getDefinitions(
+      projectId,
+      undefined,
+      repositoryId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined
+    )
   );
 
   definitions?.forEach(def => {
@@ -347,38 +400,13 @@ export async function getBuildRuns(projectId: string, definitionId: number) {
   await initializeConnection();
   if (!buildApi) throw new Error("Failed to initialize build API");
 
-  // Get in-progress/queued builds first (status: 1=InProgress, 32=NotStarted, 4=Cancelling)
-  const inProgressBuilds = await buildApi.getBuilds(
-    projectId,
-    [definitionId], // definitions
-    undefined, // queues
-    undefined, // buildNumber
-    undefined, // minTime
-    undefined, // maxTime
-    undefined, // requestedFor
-    undefined, // reasonFilter
-    1 | 4 | 32, // statusFilter - InProgress, Cancelling, NotStarted
-    undefined, // resultFilter
-    undefined, // tagFilters
-    undefined, // properties
-    10 // top
-  );
-
-  // Get completed builds
-  const completedBuilds = await buildApi.getBuilds(
-    projectId,
-    [definitionId], // definitions
-    undefined, // queues
-    undefined, // buildNumber
-    undefined, // minTime
-    undefined, // maxTime
-    undefined, // requestedFor
-    undefined, // reasonFilter
-    2, // statusFilter - Completed only
-    undefined, // resultFilter
-    undefined, // tagFilters
-    undefined, // properties
-    10 // top
+  const [inProgressBuilds, completedBuilds] = await withCache(
+    getCacheKey('buildRuns', projectId, definitionId),
+    10_000,
+    async () => Promise.all([
+      buildApi!.getBuilds(projectId, [definitionId], undefined, undefined, undefined, undefined, undefined, undefined, 1 | 4 | 32, undefined, undefined, undefined, 10),
+      buildApi!.getBuilds(projectId, [definitionId], undefined, undefined, undefined, undefined, undefined, undefined, 2, undefined, undefined, undefined, 10)
+    ])
   );
 
   // Merge: in-progress first, then completed (sorted by queueTime descending)
@@ -403,7 +431,11 @@ export async function getPullRequestIterations(projectId: string, repositoryId: 
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const iterations = await gitApi.getPullRequestIterations(repositoryId, pullRequestId, projectId, true);
+  const iterations = await withCache(
+    getCacheKey('prIterations', projectId, repositoryId, pullRequestId),
+    30_000,
+    () => gitApi!.getPullRequestIterations(repositoryId, pullRequestId, projectId, true)
+  );
   return iterations;
 }
 
@@ -418,13 +450,10 @@ export async function getPullRequestIterationChanges(
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const changes = await gitApi.getPullRequestIterationChanges(
-    repositoryId,
-    pullRequestId,
-    iterationId,
-    projectId,
-    top,
-    skip
+  const changes = await withCache(
+    getCacheKey('prIterationChanges', projectId, repositoryId, pullRequestId, iterationId, top, skip),
+    30_000,
+    () => gitApi!.getPullRequestIterationChanges(repositoryId, pullRequestId, iterationId, projectId, top, skip)
   );
   return changes;
 }
@@ -465,16 +494,20 @@ export async function getPullRequestFileDiff(
 
   try {
     // Get target (base) version - what the PR is merging into
-    const originalContent = await getItemContent(projectId, repositoryId, filePath, {
-      version: targetBranch.replace('refs/heads/', ''),
-      versionType: 0 // branch
-    });
-
-    // Get source version - the PR branch
-    const modifiedContent = await getItemContent(projectId, repositoryId, filePath, {
-      version: sourceBranch.replace('refs/heads/', ''),
-      versionType: 0 // branch
-    });
+    const [originalContent, modifiedContent] = await withCache(
+      getCacheKey('prFileDiff', projectId, repositoryId, pullRequestId, filePath, sourceBranch, targetBranch),
+      60_000,
+      async () => Promise.all([
+        getItemContent(projectId, repositoryId, filePath, {
+          version: targetBranch.replace('refs/heads/', ''),
+          versionType: 0
+        }),
+        getItemContent(projectId, repositoryId, filePath, {
+          version: sourceBranch.replace('refs/heads/', ''),
+          versionType: 0
+        })
+      ])
+    );
 
     return {
       originalContent: originalContent || '',
@@ -510,6 +543,7 @@ export async function approvePullRequest(projectId: string, repositoryId: string
       projectId
     );
 
+    clearApiCache();
     return { success: true, message: 'Pull request approved successfully' };
   } catch (error) {
     return { 
@@ -544,6 +578,7 @@ export async function addPullRequestComment(
       projectId
     );
 
+    clearApiCache();
     return { success: true, message: 'Comment added successfully' };
   } catch (error) {
     return { 
@@ -602,6 +637,7 @@ export async function completePullRequest(
       projectId
     );
 
+    clearApiCache();
     return { success: true, message: 'Pull request completed successfully' };
   } catch (error) {
     return { 
@@ -628,7 +664,11 @@ export async function getPullRequestDetails(projectId: string, repositoryId: str
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const pr = await gitApi.getPullRequest(repositoryId, pullRequestId, projectId);
+  const pr = await withCache(
+    getCacheKey('prDetails', projectId, repositoryId, pullRequestId),
+    20_000,
+    () => gitApi!.getPullRequest(repositoryId, pullRequestId, projectId)
+  );
   return pr;
 }
 
@@ -637,7 +677,11 @@ export async function getPullRequestThreads(projectId: string, repositoryId: str
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const threads = await gitApi.getThreads(repositoryId, pullRequestId, projectId);
+  const threads = await withCache(
+    getCacheKey('prThreads', projectId, repositoryId, pullRequestId),
+    20_000,
+    () => gitApi!.getThreads(repositoryId, pullRequestId, projectId)
+  );
   return threads;
 }
 
@@ -646,7 +690,11 @@ export async function getPullRequestReviewers(projectId: string, repositoryId: s
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const reviewers = await gitApi.getPullRequestReviewers(repositoryId, pullRequestId, projectId);
+  const reviewers = await withCache(
+    getCacheKey('prReviewers', projectId, repositoryId, pullRequestId),
+    20_000,
+    () => gitApi!.getPullRequestReviewers(repositoryId, pullRequestId, projectId)
+  );
   return reviewers;
 }
 
@@ -655,7 +703,11 @@ export async function getPullRequestStatuses(projectId: string, repositoryId: st
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const statuses = await gitApi.getPullRequestStatuses(repositoryId, pullRequestId, projectId);
+  const statuses = await withCache(
+    getCacheKey('prStatuses', projectId, repositoryId, pullRequestId),
+    15_000,
+    () => gitApi!.getPullRequestStatuses(repositoryId, pullRequestId, projectId)
+  );
   return statuses;
 }
 
@@ -664,7 +716,11 @@ export async function getPullRequestConflicts(projectId: string, repositoryId: s
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const conflicts = await gitApi.getPullRequestConflicts(repositoryId, pullRequestId, projectId, undefined, undefined, false, false);
+  const conflicts = await withCache(
+    getCacheKey('prConflicts', projectId, repositoryId, pullRequestId),
+    20_000,
+    () => gitApi!.getPullRequestConflicts(repositoryId, pullRequestId, projectId, undefined, undefined, false, false)
+  );
   return conflicts;
 }
 
@@ -726,7 +782,11 @@ export async function getPullRequestWorkItems(
   if (!gitApi) throw new Error("Failed to initialize git API");
 
   try {
-    const workItemRefs = await gitApi.getPullRequestWorkItemRefs(repositoryId, pullRequestId, projectId);
+    const workItemRefs = await withCache(
+      getCacheKey('prWorkItems', projectId, repositoryId, pullRequestId),
+      20_000,
+      () => gitApi!.getPullRequestWorkItemRefs(repositoryId, pullRequestId, projectId)
+    );
     return (workItemRefs || []).map(ref => ({
       id: ref.id || '',
       url: ref.url || ''
@@ -755,6 +815,7 @@ export async function togglePullRequestDraft(
       projectId
     );
 
+    clearApiCache();
     return { 
       success: true, 
       message: isDraft ? 'PR marked as draft' : 'PR published (no longer draft)' 
@@ -790,6 +851,7 @@ export async function addPullRequestReviewer(
       projectId
     );
 
+    clearApiCache();
     return { success: true, message: 'Reviewer added successfully' };
   } catch (error) {
     return { 
@@ -811,6 +873,7 @@ export async function removePullRequestReviewer(
 
   try {
     await gitApi.deletePullRequestReviewer(repositoryId, pullRequestId, reviewerId, projectId);
+    clearApiCache();
     return { success: true, message: 'Reviewer removed successfully' };
   } catch (error) {
     return { 
@@ -827,11 +890,15 @@ export async function getTeamMembers(projectId: string) {
 
   try {
     // Get the default team for the project
-    const teams = await coreApi.getTeams(projectId);
+    const teams = await withCache(getCacheKey('teams', projectId), 60_000, () => coreApi!.getTeams(projectId));
     if (!teams || teams.length === 0) return [];
 
     const defaultTeam = teams[0];
-    const members = await coreApi.getTeamMembersWithExtendedProperties(projectId, defaultTeam.id!);
+    const members = await withCache(
+      getCacheKey('teamMembers', projectId, defaultTeam.id),
+      60_000,
+      () => coreApi!.getTeamMembersWithExtendedProperties(projectId, defaultTeam.id!)
+    );
     return members;
   } catch (error) {
     console.error('Failed to get team members:', error);
@@ -844,7 +911,11 @@ export async function getBranches(projectId: string, repositoryId: string) {
   await initializeConnection();
   if (!gitApi) throw new Error("Failed to initialize git API");
 
-  const refs = await gitApi.getRefs(repositoryId, projectId, "heads/");
+  const refs = await withCache(
+    getCacheKey('branches', projectId, repositoryId),
+    60_000,
+    () => gitApi!.getRefs(repositoryId, projectId, "heads/")
+  );
   return refs?.map(ref => ({
     name: ref.name?.replace('refs/heads/', '') || '',
     objectId: ref.objectId || ''
@@ -884,6 +955,7 @@ export async function createPullRequest(
       return { success: false, message: 'Failed to create pull request' };
     }
 
+    clearApiCache();
     return { 
       success: true, 
       message: `Pull request #${pr.pullRequestId} created successfully`,
