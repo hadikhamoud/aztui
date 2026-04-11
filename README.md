@@ -15,6 +15,7 @@
 - create new repositories
 - easier login flow
 - early exit when token invalid
+- caching on projects, builds, repos, PRs, pipelines...
 
 
 
