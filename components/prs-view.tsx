@@ -1,4 +1,5 @@
 import React, { useMemo, useCallback } from "react"
+import { useTerminalDimensions } from "@opentui/react"
 import { useAppStore } from "../store/app-store"
 import { Select } from "./select"
 import { TextAttributes, SyntaxStyle, parseColor } from "@opentui/core"
@@ -77,6 +78,7 @@ function getStatusIcon(state: string): { icon: string; color: string } {
 }
 
 export function PRsView() {
+  const { height: terminalHeight } = useTerminalDimensions()
   const {
     selectedRepo,
     prFilter,
@@ -165,6 +167,8 @@ export function PRsView() {
     property: { fg: parseColor("#79C0FF") },
     default: { fg: parseColor("#E6EDF3") },
   }), [])
+
+  const descriptionEditorHeight = Math.max(5, Math.min(10, terminalHeight - 16))
 
   const handlePRSelect = (value: string) => {
     const pr = pullRequests.find(p => p.value === value)
@@ -694,18 +698,20 @@ export function PRsView() {
         ) : createPRStep === 'description' ? (
           <box flexDirection="column" gap={1}>
             <text fg="#888888">Enter PR description (optional):</text>
-            <box 
-              borderStyle="rounded" 
+            <scrollbox
+              focused={isFocused}
+              border
+              borderStyle="rounded"
               borderColor="#007595"
-              padding={0.5}
-              minHeight={3}
+              padding={1}
+              height={descriptionEditorHeight}
             >
               <text>
                 {createPRDescription || '(Enter description...)'}
                 <span fg="#007595">_</span>
               </text>
-            </box>
-            <text fg="#888888" marginTop={1}>Enter: Next | Tab: Back | Esc: Cancel</text>
+            </scrollbox>
+            <text fg="#888888" marginTop={1}>Enter: Next | Ctrl+J: New line | Tab: Back | Esc: Cancel</text>
           </box>
         ) : createPRStep === 'reviewers' ? (
           <box flexDirection="column" gap={1}>

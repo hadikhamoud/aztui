@@ -421,16 +421,16 @@ function App() {
         
         // Description input step
         if (state.createPRStep === 'description') {
+          if (key.name === 'j' && key.ctrl) {
+            state.setCreatePRDescription(state.createPRDescription + '\n')
+            return
+          }
           if (key.name === "backspace") {
             state.setCreatePRDescription(state.createPRDescription.slice(0, -1))
             return
           }
-          if (key.name === "return" && key.ctrl) {
-            state.nextCreatePRStep()
-            return
-          }
           if (key.name === "return") {
-            state.setCreatePRDescription(state.createPRDescription + '\n')
+            state.nextCreatePRStep()
             return
           }
           if (key.name === "tab") {

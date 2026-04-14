@@ -3,6 +3,58 @@ import type { SelectOption } from '@opentui/core'
 import { getProjects, getRepos, cloneRepo, createRepository, getPullRequests, getBuildDefinitions, getBuildRuns, getBuildTimeline, getBuildStepLogs, getLoggableBuildSteps, getPullRequestIterations, getPullRequestIterationChanges, getPullRequestFileDiff, approvePullRequest, addPullRequestComment, completePullRequest, getPullRequestUrl, getBuildRunUrl, getPullRequestDetails, getPullRequestThreads, getPullRequestReviewers, getPullRequestStatuses, getPullRequestConflicts, getPullRequestWorkItems, togglePullRequestDraft, addPullRequestReviewer, removePullRequestReviewer, getTeamMembers, getConflictDetails, detectCurrentRepo, isRepoInConfiguredOrg, reinitializeConnection, getBranches, createPullRequest, MergeStrategy, type BuildStep, type DetectedRepo } from '../api'
 import { hasCredentials, saveConfig, getCredentials } from '../config'
 
+function copyTextToClipboard(text: string): Promise<boolean> {
+  const { spawn } = require('child_process')
+  const platform = process.platform
+
+  const commands = platform === 'darwin'
+    ? [{ command: 'pbcopy', args: [] }]
+    : platform === 'win32'
+      ? [{ command: 'clip', args: [] }]
+      : [
+          { command: 'wl-copy', args: [] },
+          { command: 'xclip', args: ['-selection', 'clipboard'] },
+          { command: 'xsel', args: ['--clipboard', '--input'] },
+        ]
+
+  return new Promise((resolve) => {
+    const tryCommand = (index: number) => {
+      const clipboardCommand = commands[index]
+      if (!clipboardCommand) {
+        resolve(false)
+        return
+      }
+
+      let child
+      try {
+        child = spawn(clipboardCommand.command, clipboardCommand.args, {
+          stdio: ['pipe', 'ignore', 'ignore'],
+        })
+      } catch {
+        tryCommand(index + 1)
+        return
+      }
+
+      child.on('error', () => {
+        tryCommand(index + 1)
+      })
+
+      child.on('close', (code: number | null) => {
+        if (code === 0) {
+          resolve(true)
+          return
+        }
+
+        tryCommand(index + 1)
+      })
+
+      child.stdin.end(text)
+    }
+
+    tryCommand(0)
+  })
+}
+
 export interface PRFileChange {
   path: string
   changeType: string
@@ -531,22 +583,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         setTimeout(() => set({ repoActionStatus: null }), 3000)
         return
       }
-      
-      // Copy to clipboard using platform-specific command
-      const { exec } = require('child_process')
-      const platform = process.platform
-      
-      let command: string
-      if (platform === 'darwin') {
-        command = `echo "${url}" | pbcopy`
-      } else if (platform === 'win32') {
-        command = `echo ${url} | clip`
-      } else {
-        command = `echo "${url}" | xclip -selection clipboard 2>/dev/null || echo "${url}" | xsel --clipboard`
-      }
-      
-      exec(command, (error: Error | null) => {
-        if (error) {
+
+      void copyTextToClipboard(url).then((success) => {
+        if (!success) {
           set({ repoActionStatus: { message: 'Failed to copy to clipboard', isError: true } })
         } else {
           set({ repoActionStatus: { message: 'HTTPS link copied to clipboard!', isError: false } })
@@ -572,22 +611,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         setTimeout(() => set({ repoActionStatus: null }), 3000)
         return
       }
-      
-      // Copy to clipboard using platform-specific command
-      const { exec } = require('child_process')
-      const platform = process.platform
-      
-      let command: string
-      if (platform === 'darwin') {
-        command = `echo "${url}" | pbcopy`
-      } else if (platform === 'win32') {
-        command = `echo ${url} | clip`
-      } else {
-        command = `echo "${url}" | xclip -selection clipboard 2>/dev/null || echo "${url}" | xsel --clipboard`
-      }
-      
-      exec(command, (error: Error | null) => {
-        if (error) {
+
+      void copyTextToClipboard(url).then((success) => {
+        if (!success) {
           set({ repoActionStatus: { message: 'Failed to copy to clipboard', isError: true } })
         } else {
           set({ repoActionStatus: { message: 'SSH link copied to clipboard!', isError: false } })
@@ -1928,23 +1954,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       state.selectedRepo.name,
       parseInt(state.selectedPR.value)
     )
-    
-    // Copy to clipboard using platform-specific command
-    const { exec } = require('child_process')
-    const platform = process.platform
-    
-    let command: string
-    if (platform === 'darwin') {
-      command = `echo "${url}" | pbcopy`
-    } else if (platform === 'win32') {
-      command = `echo ${url} | clip`
-    } else {
-      // Linux - try xclip first, then xsel
-      command = `echo "${url}" | xclip -selection clipboard 2>/dev/null || echo "${url}" | xsel --clipboard`
-    }
-    
-    exec(command, (error: Error | null) => {
-      if (error) {
+
+    void copyTextToClipboard(url).then((success) => {
+      if (!success) {
         set({ prActionStatus: { message: 'Failed to copy to clipboard', isError: true } })
       } else {
         set({ prActionStatus: { message: 'PR link copied to clipboard!', isError: false } })
