@@ -4,7 +4,6 @@ import { Select } from "./select"
 import { TextAttributes, type MouseEvent } from "@opentui/core"
 import { getLoggableBuildSteps, type BuildStep } from "../api"
 
-// Get status icon and color for a step
 function getStepStatusDisplay(step: BuildStep): { icon: string; color: string } {
   if (step.state === 'inProgress') {
     return { icon: '⟳', color: '#FFD700' } // Yellow for in progress
@@ -143,7 +142,6 @@ export function PipelinesView() {
   const isFocused = focusedBox === 'workspace'
 
   const handlePipelineSelect = (value: string) => {
-    // Only triggered on Enter - enter the pipeline runs view
     const pipeline = pipelines.find(p => p.value === value)
     if (pipeline) {
       selectPipeline(pipeline)
@@ -151,14 +149,12 @@ export function PipelinesView() {
   }
 
   const handleRunSelect = (value: string) => {
-    // Only triggered on Enter - select the run
     const run = pipelineRuns.find(r => r.value === value)
     if (run) {
       selectPipelineRun(run)
     }
   }
 
-  // Show step logs if a step is selected
   if (selectedStep) {
     const { icon, color } = getStepStatusDisplay(selectedStep)
     const duration = formatDuration(selectedStep.startTime, selectedStep.finishTime)
@@ -215,19 +211,19 @@ export function PipelinesView() {
     const jobs = pipelineSteps.filter(s => s.type === 'Job')
     const tasks = pipelineSteps.filter(s => s.type === 'Task')
     const loggableSteps = getLoggableBuildSteps(pipelineSteps)
-    
+
     // Build a map of parent IDs to check hierarchy
     const stageIds = new Set(stages.map(s => s.id))
     const jobIds = new Set(jobs.map(j => j.id))
-    
+
     // Find orphan jobs (jobs without a stage parent or with invalid parent)
     const orphanJobs = jobs.filter(j => !j.parentId || !stageIds.has(j.parentId))
-    
+
     // Find orphan tasks (tasks without a job parent or with invalid parent)
     const orphanTasks = tasks.filter(t => !t.parentId || !jobIds.has(t.parentId))
-    
+
     // Other step types (Checkpoint, Phase, etc.)
-    const otherSteps = pipelineSteps.filter(s => 
+    const otherSteps = pipelineSteps.filter(s =>
       s.type !== 'Stage' && s.type !== 'Job' && s.type !== 'Task'
     )
 
@@ -290,7 +286,7 @@ export function PipelinesView() {
                       </box>
                     )
                   })
-                  
+
                   // Show orphan jobs (jobs not under any stage)
                   orphanJobs.forEach(job => {
                     const jobTasks = tasks.filter(t => t.parentId === job.id)
@@ -329,7 +325,7 @@ export function PipelinesView() {
                     )
                   })
                 }
-                
+
                 // Show orphan tasks (tasks not under any job)
                 orphanTasks.forEach((task, idx) => {
                   const currentTaskIndex = taskIndex++
@@ -339,7 +335,7 @@ export function PipelinesView() {
                     <StepRow key={task.id} step={task} indent={0} showDetails={showTaskDetails} isSelected={isSelected} />
                   )
                 })
-                
+
                 // Show other step types
                 otherSteps.forEach(step => {
                   const showDetails = step.result === 'failed' || step.state === 'inProgress'
@@ -347,7 +343,7 @@ export function PipelinesView() {
                     <StepRow key={step.id} step={step} indent={0} showDetails={showDetails} />
                   )
                 })
-                
+
                 // If no structured elements, just show all tasks flat
                 if (elements.length === 0 && tasks.length > 0) {
                   tasks.forEach((task, idx) => {
