@@ -27,7 +27,6 @@ function getStepStatusDisplay(step: BuildStep): { icon: string; color: string } 
   }
 }
 
-// Format duration
 function formatDuration(start?: Date, finish?: Date): string {
   if (!start) return ''
   const end = finish || new Date()
